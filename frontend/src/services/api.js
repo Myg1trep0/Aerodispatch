@@ -259,18 +259,27 @@ export async function apiGetOrderTracking(awbNumber) {
   return res.json();
 }
 
-export async function apiListOrders({ status = null, token = null, role = null }) {
-  let endpoint = `${API_BASE_URL}/api/v1/orders`;
+export async function apiListOrders({ status = null, token = null, role = null, email = null }) {
+  const authToken = token || (typeof localStorage !== 'undefined' ? (localStorage.getItem('aerodispatch_token') || localStorage.getItem('aerodispatch_access_token')) : null);
   const headers = {};
-  if (token) headers['Authorization'] = `Bearer ${token}`;
+  if (authToken) headers['Authorization'] = `Bearer ${authToken}`;
+
+  let endpoint = `${API_BASE_URL}/api/v1/orders`;
+  const params = new URLSearchParams();
+  if (status) params.append('status', status);
+  if (email) params.append('email', email);
 
   if (role === 'admin') {
     endpoint = `${API_BASE_URL}/api/v1/admin/orders`;
-    if (status) endpoint += `?status=${encodeURIComponent(status)}`;
   } else if (role === 'driver') {
     endpoint = `${API_BASE_URL}/api/v1/driver/orders`;
   } else if (role === 'customer') {
     endpoint = `${API_BASE_URL}/api/v1/customer/orders`;
+  }
+
+  const queryString = params.toString();
+  if (queryString) {
+    endpoint += `?${queryString}`;
   }
 
   const res = await fetch(endpoint, { headers });

@@ -870,9 +870,13 @@ def get_order_tracking(
 
 
 @app.get("/api/v1/customer/orders")
-def get_customer_orders(user: Dict[str, Any] = Depends(require_roles(["customer", "admin"]))):
+def get_customer_orders(
+    email: Optional[str] = Query(None),
+    user: Dict[str, Any] = Depends(require_roles(["customer", "admin"]))
+):
     """Retrieves all consignments strictly associated with the authenticated customer."""
-    orders = order_service.list_orders(customer_email=user.get("email"))
+    target_email = (user.get("email") or email or "").strip().lower()
+    orders = order_service.list_orders(customer_email=target_email)
     return {"data": orders, "count": len(orders)}
 
 

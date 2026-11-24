@@ -22,12 +22,14 @@ import {
   ExternalLink,
   ShieldCheck,
   X,
-  Camera,
-  UploadCloud,
   Eye,
   Star,
   User,
-  FileText
+  FileText,
+  Phone,
+  MessageSquare,
+  Sparkles,
+  ThumbsUp
 } from 'lucide-react';
 import ParcelDetailModal from '../components/ParcelDetailModal';
 import InvoiceModal from '../components/InvoiceModal';
@@ -69,18 +71,11 @@ export default function TrackingPage() {
   const [viewingParcel, setViewingParcel] = useState(null);
   const [isInvoiceModalOpen, setIsInvoiceModalOpen] = useState(false);
 
-  // Delivery Handover Modal State
-  const [showDeliveryModal, setShowDeliveryModal] = useState(false);
-  const [deliveryRecipient, setDeliveryRecipient] = useState('');
-  const [deliveryOtp, setDeliveryOtp] = useState('');
-  const [deliveryNotes, setDeliveryNotes] = useState('');
-  const [deliveryPhotoPreview, setDeliveryPhotoPreview] = useState(null);
-  const [isSubmittingDelivery, setIsSubmittingDelivery] = useState(false);
-
-  // Customer Star Rating State
+  // Customer Star Rating & Review State (Exclusively for Customers)
   const [selectedStars, setSelectedStars] = useState(5);
   const [hoveredStars, setHoveredStars] = useState(0);
   const [ratingFeedback, setRatingFeedback] = useState('');
+  const [selectedReviewTags, setSelectedReviewTags] = useState([]);
   const [isSubmittingRating, setIsSubmittingRating] = useState(false);
 
   // Service Skeleton Shimmer Loading - strictly 1.0s as requested
@@ -261,64 +256,10 @@ export default function TrackingPage() {
     setTimeout(() => setCopiedAwb(false), 2000);
   };
 
-  const handlePhotoUpload = (e) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      if (file.size > 5 * 1024 * 1024) {
-        addToast('File exceeds 5MB limit', 'warning');
-        return;
-      }
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setDeliveryPhotoPreview(reader.result);
-      };
-      reader.readAsDataURL(file);
-    }
-  };
-
-  const handleCompleteHandover = async (e) => {
-    e.preventDefault();
-    if (!deliveryRecipient.trim()) {
-      addToast('Please enter the recipient name.', 'warning');
-      return;
-    }
-    setIsSubmittingDelivery(true);
-    try {
-      const proofData = {
-        deliveredTo: deliveryRecipient.trim(),
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        verificationMethod: deliveryOtp.trim() ? `OTP Verified (${deliveryOtp.trim()})` : 'Signature Verified',
-        photoUrl: deliveryPhotoPreview || 'https://images.unsplash.com/photo-1549465220-1a8b9238cd48?w=500&q=80',
-      };
-      await updateShipmentStatus(
-        activeShipment.awbNumber,
-        'DELIVERED',
-        deliveryNotes.trim() || `Delivered to ${deliveryRecipient.trim()}. Handover recorded.`,
-        proofData
-      );
-      setActiveShipment(prev => ({
-        ...prev,
-        currentStatus: 'DELIVERED',
-        proofOfDelivery: proofData,
-        events: [
-          {
-            id: `ev-${Date.now()}`,
-            status: 'DELIVERED',
-            title: 'Delivery Handover Complete',
-            location: activeShipment.recipient?.city || 'Destination Hub',
-            timestamp: new Date().toLocaleString(),
-            notes: `Accepted by ${deliveryRecipient.trim()}`
-          },
-          ...(prev.events || [])
-        ]
-      }));
-      addToast(`Shipment ${activeShipment.awbNumber} marked DELIVERED with verified proof!`, 'success');
-      setShowDeliveryModal(false);
-    } catch (err) {
-      addToast(`Failed: ${err.message}`, 'error');
-    } finally {
-      setIsSubmittingDelivery(false);
-    }
+  const handleToggleReviewTag = (tag) => {
+    setSelectedReviewTags(prev => 
+      prev.includes(tag) ? prev.filter(t => t !== tag) : [...prev, tag]
+    );
   };
 
   const handleRatingSubmit = async (e) => {
@@ -340,13 +281,18 @@ export default function TrackingPage() {
 
     setIsSubmittingRating(true);
     try {
-      const res = await apiRateOrder(activeShipment.awbNumber, selectedStars, ratingFeedback);
-      addToast(`Thank you! Your ${selectedStars}★ rating for Captain ${activeShipment.assignedDriver?.name || 'Associate'} has been recorded.`, 'success');
+      const fullFeedback = [
+        selectedReviewTags.length > 0 ? `[${selectedReviewTags.join(', ')}]` : '',
+        ratingFeedback.trim()
+      ].filter(Boolean).join(' ');
+
+      const res = await apiRateOrder(activeShipment.awbNumber, selectedStars, fullFeedback);
+      addToast(`Thank you! Your ${selectedStars}★ rating for Captain ${activeShipment.assignedDriver?.name || 'Rishabh Verma'} has been recorded.`, 'success');
       const updatedShipment = res?.data || {
         ...activeShipment,
         customerRating: {
           rating: selectedStars,
-          feedback: ratingFeedback,
+          feedback: fullFeedback,
           ratedBy: currentUser?.name || activeShipment.recipient?.name || 'Customer',
           ratedAt: new Date().toISOString()
         }
@@ -629,55 +575,101 @@ export default function TrackingPage() {
               <MyMap shipment={activeShipment} />
             </div>
 
-            {/* Live Delivery Handover & POD Submission Action Card (When in progress) */}
+            {/* Live Customer Consignment Status Card (When in progress) */}
             {!activeShipment.proofOfDelivery && activeShipment.currentStatus !== 'DELIVERED' && (
               <div style={{ 
                 marginTop: '1.25rem', 
-                padding: '1.25rem', 
-                background: 'rgba(239, 68, 68, 0.08)', 
-                border: '1px solid rgba(239, 68, 68, 0.35)', 
+                padding: '1.15rem 1.35rem', 
+                background: activeShipment.currentStatus === 'OUT_FOR_DELIVERY' 
+                  ? 'linear-gradient(135deg, rgba(99, 102, 241, 0.08) 0%, rgba(139, 92, 246, 0.04) 100%)' 
+                  : 'var(--bg-secondary)', 
+                border: activeShipment.currentStatus === 'OUT_FOR_DELIVERY'
+                  ? '1px solid rgba(99, 102, 241, 0.35)'
+                  : '1px solid var(--border-medium)', 
                 borderRadius: 'var(--radius-md)',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'space-between',
                 flexWrap: 'wrap',
-                gap: '1rem'
+                gap: '1rem',
+                boxShadow: '0 2px 8px rgba(0, 0, 0, 0.04)'
               }}>
-                <div>
-                  <div style={{ fontWeight: 800, color: 'var(--text-main)', fontSize: '0.95rem', display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
-                    <Package size={17} color="#ef4444" />
-                    <span>Current Status: <strong style={{ color: '#ef4444' }}>{activeShipment.currentStatus}</strong> • In Progress</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.9rem' }}>
+                  <div style={{
+                    width: '42px',
+                    height: '42px',
+                    borderRadius: '50%',
+                    background: activeShipment.currentStatus === 'OUT_FOR_DELIVERY'
+                      ? 'rgba(99, 102, 241, 0.15)'
+                      : activeShipment.currentStatus === 'IN_TRANSIT'
+                      ? 'rgba(14, 165, 233, 0.15)'
+                      : 'rgba(245, 158, 11, 0.15)',
+                    color: activeShipment.currentStatus === 'OUT_FOR_DELIVERY'
+                      ? '#6366F1'
+                      : activeShipment.currentStatus === 'IN_TRANSIT'
+                      ? '#0EA5E9'
+                      : '#F59E0B',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    flexShrink: 0
+                  }}>
+                    {activeShipment.currentStatus === 'OUT_FOR_DELIVERY' ? (
+                      <Truck size={22} />
+                    ) : activeShipment.currentStatus === 'IN_TRANSIT' ? (
+                      <Clock size={22} />
+                    ) : (
+                      <Package size={22} />
+                    )}
                   </div>
-                  <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '4px' }}>
-                    Package is active. Ready to complete this delivery and generate the Proof of Delivery (POD) dossier?
+                  <div>
+                    <div style={{ fontWeight: 800, color: 'var(--text-main)', fontSize: '0.95rem', display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                      <span>
+                        {activeShipment.currentStatus === 'OUT_FOR_DELIVERY'
+                          ? 'Out for Doorstep Delivery'
+                          : activeShipment.currentStatus === 'IN_TRANSIT'
+                          ? 'In Transit Across Logistics Network'
+                          : 'Order Booked & Registered'}
+                      </span>
+                      <StatusBadge status={activeShipment.currentStatus} />
+                    </div>
+                    <div style={{ fontSize: '0.82rem', color: 'var(--text-muted)', marginTop: '3px' }}>
+                      {activeShipment.currentStatus === 'OUT_FOR_DELIVERY' ? (
+                        <>Assigned to Captain <strong>{activeShipment.assignedDriver?.name || 'Rishabh Verma'}</strong>. Arrival expected shortly at your doorstep.</>
+                      ) : activeShipment.currentStatus === 'IN_TRANSIT' ? (
+                        <>Package is moving across regional logistics hubs towards <strong>{activeShipment.recipient?.city || 'Destination'}</strong>.</>
+                      ) : (
+                        <>Shipment registered in express logistics pipeline. Awaiting courier allocation and air dispatch.</>
+                      )}
+                    </div>
                   </div>
                 </div>
 
-                <button
-                  type="button"
-                  onClick={() => {
-                    setDeliveryRecipient(activeShipment.recipient?.name || 'Rohan Sharma');
-                    setDeliveryOtp('4892');
-                    setShowDeliveryModal(true);
-                  }}
-                  style={{
-                    background: 'linear-gradient(135deg, #10B981 0%, #059669 100%)',
-                    color: '#ffffff',
-                    border: 'none',
-                    padding: '0.6rem 1.25rem',
-                    borderRadius: '8px',
-                    fontWeight: 700,
-                    fontSize: '0.85rem',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '0.45rem',
-                    boxShadow: '0 4px 14px rgba(16, 185, 129, 0.35)'
-                  }}
-                >
-                  <CheckCircle2 size={16} />
-                  <span>Complete Delivery &amp; Record Proof (POD)</span>
-                </button>
+                {activeShipment.currentStatus === 'OUT_FOR_DELIVERY' ? (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                    <a
+                      href={`tel:${activeShipment.assignedDriver?.phone || '+919876543210'}`}
+                      className="btn btn-sm btn-secondary"
+                      style={{ textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.8rem', padding: '0.5rem 0.85rem' }}
+                    >
+                      <Phone size={14} />
+                      <span>Call Captain</span>
+                    </a>
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-primary"
+                      onClick={() => openChatbox ? openChatbox(activeShipment.awbNumber) : null}
+                      style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', fontSize: '0.8rem', padding: '0.5rem 0.85rem' }}
+                    >
+                      <MessageSquare size={14} />
+                      <span>Chat with Captain</span>
+                    </button>
+                  </div>
+                ) : (
+                  <div style={{ fontSize: '0.78rem', color: 'var(--text-dim)', fontStyle: 'italic' }}>
+                    Captain review unlocks once delivery handover is completed.
+                  </div>
+                )}
               </div>
             )}
 
@@ -754,43 +746,81 @@ export default function TrackingPage() {
               const isDriverViewer = (currentRole === 'driver' || (currentUser?.role === 'driver' && currentRole !== 'customer')) && currentRole !== 'customer';
               const isAdminViewer = currentRole === 'admin' || (currentUser?.role === 'admin' && currentRole !== 'customer');
               const canSubmitRating = !isDriverViewer && !isAdminViewer;
+              const captainName = activeShipment.assignedDriver?.name || 'Rishabh Verma';
+              const captainInitials = captainName.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase() || 'CP';
+
+              const REVIEW_PRESETS = [
+                '⚡ Super Fast Delivery',
+                '📦 Handled with Care',
+                '🛡️ Safe & Contactless',
+                '⭐ Polite & Courteous Captain',
+                '📍 Perfect Doorstep Drop'
+              ];
+
+              const STAR_TEXTS = {
+                1: '1 Star - Needs Improvement',
+                2: '2 Stars - Fair Service',
+                3: '3 Stars - Good Delivery',
+                4: '4 Stars - Very Good Experience',
+                5: '5 Stars - Outstanding Delivery & Service!'
+              };
 
               return (
                 <div 
                   id="customer-rating-section"
                   style={{ 
-                    marginTop: '1rem', 
-                    padding: '1.25rem 1.5rem', 
+                    marginTop: '1.25rem', 
+                    padding: '1.35rem 1.6rem', 
                     background: 'var(--bg-secondary)', 
                     border: '1px solid var(--border-medium)', 
                     borderRadius: 'var(--radius-md)',
-                    boxShadow: '0 4px 16px rgba(0, 0, 0, 0.05)'
+                    boxShadow: '0 4px 18px rgba(0, 0, 0, 0.06)'
                   }}
                 >
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.75rem', marginBottom: '0.75rem' }}>
-                    <div>
-                      <h3 style={{ fontSize: '1rem', fontWeight: 800, margin: 0, display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--text-main)' }}>
-                        <Star size={18} fill="#F59E0B" color="#F59E0B" />
-                        <span>
-                          {isDriverViewer
-                            ? 'Customer Rating & Service Review'
-                            : isAdminViewer
-                            ? 'Consignment Customer Feedback & Rating'
-                            : 'Rate Delivery Captain & Experience'}
-                        </span>
-                      </h3>
-                      <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
-                        {isDriverViewer ? (
-                          <>Delivery completed to <strong>{activeShipment.recipient?.name || 'Customer'}</strong> ({activeShipment.recipient?.city || 'Destination'})</>
-                        ) : (
-                          <>Delivered by <strong>{activeShipment.assignedDriver?.name || 'AeroDispatch Delivery Captain'}</strong></>
-                        )}
+                  {/* Card Header with Captain Info */}
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.85rem', marginBottom: '1rem', paddingBottom: '0.85rem', borderBottom: '1px solid var(--border-subtle)' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.85rem' }}>
+                      <div style={{
+                        width: '44px',
+                        height: '44px',
+                        borderRadius: '50%',
+                        background: 'linear-gradient(135deg, #F59E0B 0%, #D97706 100%)',
+                        color: '#ffffff',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        fontWeight: 800,
+                        fontSize: '1rem',
+                        boxShadow: '0 2px 10px rgba(245, 158, 11, 0.35)',
+                        flexShrink: 0
+                      }}>
+                        {captainInitials}
+                      </div>
+                      <div>
+                        <h3 style={{ fontSize: '1.05rem', fontWeight: 800, margin: 0, display: 'flex', alignItems: 'center', gap: '0.45rem', color: 'var(--text-main)' }}>
+                          <Star size={18} fill="#F59E0B" color="#F59E0B" />
+                          <span>
+                            {isDriverViewer
+                              ? 'Customer Rating & Service Review'
+                              : isAdminViewer
+                              ? 'Consignment Customer Review & Performance'
+                              : `Rate Delivery Captain ${captainName}`}
+                          </span>
+                        </h3>
+                        <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
+                          {isDriverViewer ? (
+                            <>Delivery completed to recipient <strong>{activeShipment.recipient?.name || 'Customer'}</strong> ({activeShipment.recipient?.city || 'Destination'})</>
+                          ) : (
+                            <>Doorstep handover fulfilled by Captain <strong>{captainName}</strong> • Verified Courier</>
+                          )}
+                        </div>
                       </div>
                     </div>
+
                     {activeShipment.customerRating && (
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', background: 'rgba(245, 158, 11, 0.12)', padding: '0.35rem 0.85rem', borderRadius: '9999px', border: '1px solid rgba(245, 158, 11, 0.35)' }}>
-                        <Star size={15} fill="#F59E0B" color="#F59E0B" />
-                        <span style={{ fontWeight: 800, color: '#F59E0B', fontSize: '0.875rem' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', background: 'rgba(245, 158, 11, 0.12)', padding: '0.4rem 0.95rem', borderRadius: '9999px', border: '1px solid rgba(245, 158, 11, 0.35)' }}>
+                        <Star size={16} fill="#F59E0B" color="#F59E0B" />
+                        <span style={{ fontWeight: 800, color: '#F59E0B', fontSize: '0.9rem' }}>
                           {activeShipment.customerRating.rating} / 5 Stars
                         </span>
                       </div>
@@ -798,84 +828,152 @@ export default function TrackingPage() {
                   </div>
 
                   {activeShipment.customerRating ? (
-                    <div style={{ background: 'var(--bg-primary)', padding: '0.85rem 1rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)' }}>
-                      <div style={{ display: 'flex', gap: '0.25rem', marginBottom: '0.35rem' }}>
-                        {[1, 2, 3, 4, 5].map((star) => (
-                          <Star 
-                            key={star} 
-                            size={16} 
-                            fill={star <= activeShipment.customerRating.rating ? '#F59E0B' : 'none'} 
-                            color={star <= activeShipment.customerRating.rating ? '#F59E0B' : 'var(--text-dim)'} 
-                          />
-                        ))}
+                    /* Existing Verified Review */
+                    <div style={{ background: 'var(--bg-primary)', padding: '1.1rem 1.25rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '0.5rem' }}>
+                        <div style={{ display: 'flex', gap: '0.25rem', alignItems: 'center' }}>
+                          {[1, 2, 3, 4, 5].map((star) => (
+                            <Star 
+                              key={star} 
+                              size={18} 
+                              fill={star <= activeShipment.customerRating.rating ? '#F59E0B' : 'none'} 
+                              color={star <= activeShipment.customerRating.rating ? '#F59E0B' : 'var(--text-dim)'} 
+                            />
+                          ))}
+                          <span style={{ fontWeight: 800, color: '#F59E0B', fontSize: '0.88rem', marginLeft: '0.4rem' }}>
+                            {activeShipment.customerRating.rating} / 5 Rating
+                          </span>
+                        </div>
+                        <span style={{ fontSize: '0.75rem', color: 'var(--accent-emerald)', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}>
+                          <CheckCircle2 size={14} />
+                          <span>Verified Customer Review</span>
+                        </span>
                       </div>
                       {activeShipment.customerRating.feedback && (
-                        <p style={{ fontSize: '0.875rem', color: 'var(--text-main)', margin: '0.35rem 0 0 0', fontStyle: 'italic' }}>
+                        <p style={{ fontSize: '0.9rem', color: 'var(--text-main)', margin: '0.4rem 0 0 0', fontStyle: 'italic', lineHeight: 1.45 }}>
                           "{activeShipment.customerRating.feedback}"
                         </p>
                       )}
-                      <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', marginTop: '0.4rem' }}>
-                        Verified feedback by {activeShipment.customerRating.ratedBy || 'Customer'}
+                      <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', marginTop: '0.55rem' }}>
+                        Submitted by <strong>{activeShipment.customerRating.ratedBy || 'Customer'}</strong> • Added to Captain {captainName}'s service history
                       </div>
                     </div>
                   ) : canSubmitRating ? (
-                    <form onSubmit={handleRatingSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-                        <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)', fontWeight: 600 }}>Your Star Rating:</span>
-                        <div style={{ display: 'flex', gap: '0.25rem' }}>
-                          {[1, 2, 3, 4, 5].map((star) => {
-                            const isFilled = (hoveredStars || selectedStars) >= star;
+                    /* Interactive Customer Review Form */
+                    <form onSubmit={handleRatingSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                      {/* Star Rating Picker */}
+                      <div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+                          <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)', fontWeight: 600 }}>Your Star Rating:</span>
+                          <div style={{ display: 'flex', gap: '0.35rem' }}>
+                            {[1, 2, 3, 4, 5].map((star) => {
+                              const isFilled = (hoveredStars || selectedStars) >= star;
+                              return (
+                                <button
+                                  key={star}
+                                  type="button"
+                                  onClick={() => setSelectedStars(star)}
+                                  onMouseEnter={() => setHoveredStars(star)}
+                                  onMouseLeave={() => setHoveredStars(0)}
+                                  style={{ 
+                                    background: 'transparent', 
+                                    border: 'none', 
+                                    cursor: 'pointer', 
+                                    padding: '0.2rem',
+                                    transform: (hoveredStars === star || selectedStars === star) ? 'scale(1.15)' : 'scale(1)',
+                                    transition: 'transform 0.15s ease' 
+                                  }}
+                                  title={`Rate ${star} Star${star > 1 ? 's' : ''}`}
+                                >
+                                  <Star 
+                                    size={26} 
+                                    fill={isFilled ? '#F59E0B' : 'transparent'} 
+                                    color={isFilled ? '#F59E0B' : 'var(--text-dim)'} 
+                                  />
+                                </button>
+                              );
+                            })}
+                          </div>
+                          <span style={{ fontSize: '0.85rem', fontWeight: 800, color: '#F59E0B', marginLeft: '0.25rem' }}>
+                            {STAR_TEXTS[hoveredStars || selectedStars] || `${selectedStars} Stars`}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Quick-Select Compliment Tags */}
+                      <div>
+                        <div style={{ fontSize: '0.8rem', color: 'var(--text-dim)', marginBottom: '0.4rem', fontWeight: 600 }}>
+                          Select Quick Compliments (Click to tag):
+                        </div>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.45rem' }}>
+                          {REVIEW_PRESETS.map((tag) => {
+                            const isSelected = selectedReviewTags.includes(tag);
                             return (
                               <button
-                                key={star}
+                                key={tag}
                                 type="button"
-                                onClick={() => setSelectedStars(star)}
-                                onMouseEnter={() => setHoveredStars(star)}
-                                onMouseLeave={() => setHoveredStars(0)}
-                                style={{ 
-                                  background: 'transparent', 
-                                  border: 'none', 
-                                  cursor: 'pointer', 
-                                  padding: '0.2rem',
-                                  transition: 'transform 0.15s ease' 
+                                onClick={() => handleToggleReviewTag(tag)}
+                                style={{
+                                  background: isSelected ? 'rgba(16, 185, 129, 0.15)' : 'var(--bg-primary)',
+                                  border: isSelected ? '1px solid rgba(16, 185, 129, 0.5)' : '1px solid var(--border-medium)',
+                                  color: isSelected ? 'var(--accent-emerald)' : 'var(--text-muted)',
+                                  padding: '0.35rem 0.75rem',
+                                  borderRadius: '9999px',
+                                  fontSize: '0.78rem',
+                                  fontWeight: isSelected ? 700 : 500,
+                                  cursor: 'pointer',
+                                  transition: 'all 0.15s ease'
                                 }}
-                                title={`Rate ${star} Star${star > 1 ? 's' : ''}`}
                               >
-                                <Star 
-                                  size={24} 
-                                  fill={isFilled ? '#F59E0B' : 'transparent'} 
-                                  color={isFilled ? '#F59E0B' : 'var(--text-dim)'} 
-                                />
+                                {tag} {isSelected ? '✓' : ''}
                               </button>
                             );
                           })}
                         </div>
-                        <span style={{ fontSize: '0.875rem', fontWeight: 800, color: '#F59E0B', marginLeft: '0.25rem' }}>
-                          {selectedStars} Star{selectedStars > 1 ? 's' : ''}
-                        </span>
                       </div>
 
-                      <textarea
-                        className="form-input"
-                        rows={2}
-                        placeholder="Share your delivery feedback (e.g. On-time delivery, parcel handled with care, courteous captain)..."
-                        value={ratingFeedback}
-                        onChange={(e) => setRatingFeedback(e.target.value)}
-                        style={{ fontSize: '0.85rem', width: '100%', resize: 'vertical' }}
-                      />
+                      {/* Feedback Comment Box */}
+                      <div>
+                        <textarea
+                          className="form-input"
+                          rows={2}
+                          placeholder={`Write a quick review for Captain ${captainName} (e.g. On-time delivery, polite attitude, verified package handover)...`}
+                          value={ratingFeedback}
+                          onChange={(e) => setRatingFeedback(e.target.value)}
+                          style={{ fontSize: '0.85rem', width: '100%', resize: 'vertical' }}
+                        />
+                      </div>
 
-                      <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                      {/* Submit Button */}
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem' }}>
+                        <span style={{ fontSize: '0.76rem', color: 'var(--text-dim)' }}>
+                          Feedback directly updates Captain {captainName}'s rating score
+                        </span>
                         <button
                           type="submit"
                           className="btn btn-primary"
                           disabled={isSubmittingRating}
-                          style={{ padding: '0.45rem 1.4rem', borderRadius: '9999px', fontSize: '0.85rem', fontWeight: 700 }}
+                          style={{ 
+                            padding: '0.55rem 1.6rem', 
+                            borderRadius: '9999px', 
+                            fontSize: '0.85rem', 
+                            fontWeight: 700,
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '0.45rem',
+                            background: 'linear-gradient(135deg, #F59E0B 0%, #D97706 100%)',
+                            border: 'none',
+                            color: '#ffffff',
+                            boxShadow: '0 4px 14px rgba(245, 158, 11, 0.35)'
+                          }}
                         >
-                          {isSubmittingRating ? 'Recording Rating...' : 'Submit Rating'}
+                          <Star size={15} fill="#ffffff" />
+                          <span>{isSubmittingRating ? 'Submitting Review...' : `Submit Review for Captain ${captainName}`}</span>
                         </button>
                       </div>
                     </form>
                   ) : (
+                    /* Read-Only Notice for Drivers & Admins */
                     <div style={{
                       display: 'flex',
                       alignItems: 'center',
@@ -904,8 +1002,8 @@ export default function TrackingPage() {
                         </div>
                         <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '2px' }}>
                           {isDriverViewer
-                            ? `Ratings are submitted exclusively by recipient ${activeShipment.recipient?.name || 'Customer'}. Drivers cannot rate their own deliveries. When the customer submits their review, their points will display here and update your Captain score.`
-                            : `Pending customer evaluation. Only the registered recipient (${activeShipment.recipient?.name || 'Customer'}) can submit a verified rating.`
+                            ? `Ratings are submitted exclusively by recipient ${activeShipment.recipient?.name || 'Customer'}. Couriers and drivers cannot rate their own deliveries. When the recipient leaves a rating, it will appear here and reflect on your Captain leaderboard score.`
+                            : `Pending recipient evaluation. Only the verified customer (${activeShipment.recipient?.name || 'Customer'}) can submit this rating.`
                           }
                         </div>
                       </div>
@@ -1155,125 +1253,6 @@ export default function TrackingPage() {
             >
               Close Preview
             </button>
-          </div>
-        </div>
-      )}
-
-      {/* Delivery Handover / POD Modal */}
-      {showDeliveryModal && activeShipment && (
-        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="delivery-modal-title">
-          <div className="modal-dialog" style={{ maxWidth: '540px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
-              <div>
-                <h3 id="delivery-modal-title" style={{ fontSize: '1.2rem', color: 'var(--accent-emerald)', display: 'flex', alignItems: 'center', gap: '0.5rem', margin: 0 }}>
-                  <ShieldCheck size={20} />
-                  <span>Doorstep Handover &amp; e-POD</span>
-                </h3>
-                <span className="mono" style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>
-                  AWB: {activeShipment.awbNumber} • {activeShipment.recipient?.name || 'Customer'}
-                </span>
-              </div>
-              <button 
-                type="button" 
-                onClick={() => setShowDeliveryModal(false)}
-                style={{ background: 'transparent', border: 'none', color: 'var(--text-dim)', cursor: 'pointer', padding: '4px' }}
-                aria-label="Close dialog"
-              >
-                <X size={20} />
-              </button>
-            </div>
-
-            <form onSubmit={handleCompleteHandover}>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem', marginBottom: '1rem' }}>
-                <div>
-                  <label className="form-label" htmlFor="received-by-input">Received By (Name) *</label>
-                  <input 
-                    id="received-by-input"
-                    type="text" 
-                    className="form-input" 
-                    placeholder="e.g. Recipient Name or Security" 
-                    value={deliveryRecipient}
-                    onChange={(e) => setDeliveryRecipient(e.target.value)}
-                    required
-                  />
-                </div>
-
-                <div>
-                  <label className="form-label" htmlFor="otp-input">Delivery OTP Code</label>
-                  <input 
-                    id="otp-input"
-                    type="text" 
-                    className="form-input" 
-                    placeholder="e.g. 4892" 
-                    value={deliveryOtp}
-                    onChange={(e) => setDeliveryOtp(e.target.value)}
-                  />
-                </div>
-              </div>
-
-              <div style={{ marginBottom: '1rem' }}>
-                <label className="form-label" htmlFor="delivery-notes-input">Handover Notes</label>
-                <input 
-                  id="delivery-notes-input"
-                  type="text" 
-                  className="form-input" 
-                  placeholder="e.g. Delivered directly to recipient, signature verified" 
-                  value={deliveryNotes}
-                  onChange={(e) => setDeliveryNotes(e.target.value)}
-                />
-              </div>
-
-              {/* Photo Proof */}
-              <div style={{ marginBottom: '1.25rem', padding: '0.85rem', background: 'rgba(255, 255, 255, 0.03)', borderRadius: 'var(--radius-sm)', border: '1px dashed var(--border-medium)' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.85rem' }}>
-                    <Camera size={16} color="var(--primary)" />
-                    <span style={{ fontWeight: 600 }}>Delivery Photo Proof</span>
-                  </div>
-                  <label className="btn btn-sm btn-secondary" style={{ cursor: 'pointer', margin: 0 }}>
-                    <UploadCloud size={14} />
-                    <span>{deliveryPhotoPreview ? 'Change Photo' : 'Upload Photo'}</span>
-                    <input 
-                      type="file" 
-                      accept="image/jpeg,image/png,image/webp" 
-                      style={{ display: 'none' }} 
-                      onChange={handlePhotoUpload}
-                    />
-                  </label>
-                </div>
-
-                {deliveryPhotoPreview && (
-                  <div style={{ marginTop: '0.75rem', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                    <img 
-                      src={deliveryPhotoPreview} 
-                      alt="Proof preview" 
-                      style={{ width: '80px', height: '60px', objectFit: 'cover', borderRadius: '4px', border: '1px solid var(--border-medium)' }} 
-                    />
-                    <div style={{ fontSize: '0.75rem', color: 'var(--accent-emerald)' }}>
-                      ✓ Photo attached &amp; ready for AI verification
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem' }}>
-                <button 
-                  type="button" 
-                  className="btn btn-secondary btn-sm"
-                  onClick={() => setShowDeliveryModal(false)}
-                >
-                  Cancel
-                </button>
-                <button 
-                  type="submit" 
-                  className="btn btn-primary btn-sm"
-                  style={{ background: 'linear-gradient(135deg, #10B981 0%, #059669 100%)', border: 'none' }}
-                  disabled={isSubmittingDelivery}
-                >
-                  {isSubmittingDelivery ? 'Recording Handover...' : 'Confirm & Mark Delivered'}
-                </button>
-              </div>
-            </form>
           </div>
         </div>
       )}

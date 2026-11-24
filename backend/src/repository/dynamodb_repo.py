@@ -201,12 +201,12 @@ class DynamoDBOrderRepository(OrderRepositoryInterface):
                     if i.get("assignedDriver") and i["assignedDriver"].get("driverId") == driver_id
                 ]
             if customer_email:
-                c_norm = customer_email.strip().lower()
+                c_norm = str(customer_email).strip().lower()
                 items = [
                     i for i in items
-                    if (i.get("customerEmail") and i["customerEmail"].strip().lower() == c_norm)
-                    or (i.get("sender") and i["sender"].get("email") and i["sender"]["email"].strip().lower() == c_norm)
-                    or (i.get("recipient") and i["recipient"].get("email") and i["recipient"]["email"].strip().lower() == c_norm)
+                    if (i.get("customerEmail") and str(i["customerEmail"]).strip().lower() == c_norm)
+                    or (isinstance(i.get("sender"), dict) and i["sender"].get("email") and str(i["sender"]["email"]).strip().lower() == c_norm)
+                    or (isinstance(i.get("recipient"), dict) and i["recipient"].get("email") and str(i["recipient"]["email"]).strip().lower() == c_norm)
                 ]
             return items
         except Exception as e:

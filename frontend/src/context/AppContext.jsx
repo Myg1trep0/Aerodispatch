@@ -438,8 +438,28 @@ export function AppProvider({ children }) {
     }
     if (currentUser.role === 'customer') {
       const email = (currentUser.email || '').toLowerCase().trim();
-      if (!email) return [];
-      return shipments.filter(s => (s.customerEmail || '').toLowerCase().trim() === email);
+      const name = (currentUser.name || '').toLowerCase().trim();
+      const phone = (currentUser.phone || currentUser.phoneNumber || '').replace(/\D/g, '');
+
+      return shipments.filter(s => {
+        const custEmail = (s.customerEmail || '').toLowerCase().trim();
+        const senderEmail = (s.sender?.email || '').toLowerCase().trim();
+        const recipientEmail = (s.recipient?.email || '').toLowerCase().trim();
+        if (email && (custEmail === email || senderEmail === email || recipientEmail === email)) {
+          return true;
+        }
+        const sPhone = (s.sender?.phone || '').replace(/\D/g, '');
+        const rPhone = (s.recipient?.phone || '').replace(/\D/g, '');
+        if (phone && phone.length >= 6 && (sPhone.endsWith(phone) || rPhone.endsWith(phone) || phone.endsWith(sPhone) || phone.endsWith(rPhone))) {
+          return true;
+        }
+        const sName = (s.sender?.name || '').toLowerCase().trim();
+        const rName = (s.recipient?.name || '').toLowerCase().trim();
+        if (name && (sName === name || rName === name)) {
+          return true;
+        }
+        return false;
+      });
     }
     return [];
   }, [shipments, currentUser]);
@@ -729,8 +749,8 @@ export function AppProvider({ children }) {
       if (currentUser?.role === 'admin') {
         fetchAdminStats().catch(() => {});
       }
-      if (isBackendOnline && currentUser) {
-        let tokenToUse = authToken;
+      if (currentUser) {
+        let tokenToUse = authToken || (typeof localStorage !== 'undefined' ? (localStorage.getItem('aerodispatch_token') || localStorage.getItem('aerodispatch_access_token')) : '');
         if (currentUser.role === 'admin' && (!tokenToUse || !tokenToUse.includes('.'))) {
           try {
             const authRes = await apiLogin('admin@aerodispatch.io', 'Admin@AeroDispatch2026!', 'admin');
@@ -742,17 +762,26 @@ export function AppProvider({ children }) {
             console.warn("Could not exchange admin token:", e);
           }
         }
-        const res = await apiListOrders({ role: currentUser.role, token: tokenToUse });
+        const res = await apiListOrders({ 
+          role: currentUser.role, 
+          token: tokenToUse,
+          email: currentUser.email 
+        });
         if (res && Array.isArray(res.data) && res.data.length > 0) {
+          const freshShipments = res.data.map(sanitizeShipment);
           setShipments(prev => {
             const map = new Map();
             (prev || []).forEach(o => {
               if (o.awbNumber && o.awbNumber !== 'AD-8849-2041') map.set(o.awbNumber, o);
             });
-            res.data.forEach(o => {
+            freshShipments.forEach(o => {
               if (o.awbNumber && o.awbNumber !== 'AD-8849-2041') map.set(o.awbNumber, o);
             });
-            return Array.from(map.values()).map(sanitizeShipment);
+            const merged = Array.from(map.values()).map(sanitizeShipment);
+            try {
+              localStorage.setItem('aerodispatch_shipments', JSON.stringify(merged));
+            } catch (e) {}
+            return merged;
           });
         }
       }
@@ -764,13 +793,13 @@ export function AppProvider({ children }) {
     } finally {
       setIsLoadingOrders(false);
     }
-  }, [isBackendOnline, currentUser, authToken, addToast]);
+  }, [currentUser, authToken, addToast]);
 
   useEffect(() => {
-    if (isBackendOnline && currentUser) {
+    if (currentUser) {
       refreshBackendOrders();
     }
-  }, [isBackendOnline, currentUser, refreshBackendOrders]);
+  }, [currentUser, refreshBackendOrders]);
 
   // Role switching is strictly restricted to operations preview
   const switchRole = async (newRole) => {
@@ -896,6 +925,30 @@ export function AppProvider({ children }) {
       setCurrentUser(authUser);
       localStorage.setItem('aerodispatch_user', JSON.stringify(authUser));
       if (token) localStorage.setItem('aerodispatch_token', token);
+
+      // Cross-Device Synchronization: Fetch real account shipments from backend cloud immediately on login
+      try {
+        const orderRes = await apiListOrders({ 
+          role: authUser.role, 
+          token: token,
+          email: authUser.email 
+        });
+        if (orderRes && Array.isArray(orderRes.data) && orderRes.data.length > 0) {
+          const freshShipments = orderRes.data.map(sanitizeShipment);
+          setShipments(prev => {
+            const map = new Map();
+            (prev || []).forEach(s => { if (s.awbNumber) map.set(s.awbNumber, s); });
+            freshShipments.forEach(s => { if (s.awbNumber) map.set(s.awbNumber, s); });
+            const merged = Array.from(map.values()).map(sanitizeShipment);
+            try {
+              localStorage.setItem('aerodispatch_shipments', JSON.stringify(merged));
+            } catch (e) {}
+            return merged;
+          });
+        }
+      } catch (syncErr) {
+        console.warn("Cloud sync on login notice:", syncErr);
+      }
 
       // Trigger role-specific entrance animation without heavy background
       setLoginAnimationRole(authUser.role);
@@ -1052,6 +1105,30 @@ export function AppProvider({ children }) {
     localStorage.setItem('aerodispatch_token', token);
     localStorage.setItem('aerodispatch_role', authUser.role);
 
+    // Cross-Device Synchronization on Google Login
+    try {
+      const orderRes = await apiListOrders({ 
+        role: authUser.role, 
+        token: token,
+        email: authUser.email 
+      });
+      if (orderRes && Array.isArray(orderRes.data) && orderRes.data.length > 0) {
+        const freshShipments = orderRes.data.map(sanitizeShipment);
+        setShipments(prev => {
+          const map = new Map();
+          (prev || []).forEach(s => { if (s.awbNumber) map.set(s.awbNumber, s); });
+          freshShipments.forEach(s => { if (s.awbNumber) map.set(s.awbNumber, s); });
+          const merged = Array.from(map.values()).map(sanitizeShipment);
+          try {
+            localStorage.setItem('aerodispatch_shipments', JSON.stringify(merged));
+          } catch (e) {}
+          return merged;
+        });
+      }
+    } catch (syncErr) {
+      console.warn("Google SSO cloud sync notice:", syncErr);
+    }
+
     const destTab = authUser.role === 'driver' ? 'driver' : 'shipments';
     setActiveTab(destTab);
     addToast(`Signed in with Google as ${authUser.name} (${authUser.email})`, 'success');
@@ -1064,9 +1141,16 @@ export function AppProvider({ children }) {
 
     if (isBackendOnline) {
       try {
-        const res = await apiCreateOrder(formData, null, authToken);
+        const tokenToUse = authToken || (typeof localStorage !== 'undefined' ? (localStorage.getItem('aerodispatch_token') || localStorage.getItem('aerodispatch_access_token')) : '');
+        const res = await apiCreateOrder(formData, null, tokenToUse);
         finalOrder = sanitizeShipment(res.data);
-        setShipments(prev => [finalOrder, ...prev.filter(s => s.awbNumber !== finalOrder.awbNumber)]);
+        setShipments(prev => {
+          const next = [finalOrder, ...prev.filter(s => s.awbNumber !== finalOrder.awbNumber)];
+          try {
+            localStorage.setItem('aerodispatch_shipments', JSON.stringify(next));
+          } catch (e) {}
+          return next;
+        });
         setSelectedAwb(finalOrder.awbNumber);
         addToast(`Shipment ${finalOrder.awbNumber} created successfully!`, 'success');
       } catch (e) {
@@ -1132,7 +1216,13 @@ export function AppProvider({ children }) {
         ]
       };
 
-      setShipments(prev => [finalOrder, ...prev]);
+      setShipments(prev => {
+        const next = [finalOrder, ...prev];
+        try {
+          localStorage.setItem('aerodispatch_shipments', JSON.stringify(next));
+        } catch (e) {}
+        return next;
+      });
       setSelectedAwb(awb);
       addToast(`Shipment ${awb} booked successfully!`, 'success');
     }
