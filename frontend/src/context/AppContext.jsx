@@ -42,14 +42,15 @@ export function AppProvider({ children }) {
       try {
         const parsed = JSON.parse(savedUser);
         if (parsed.email?.toLowerCase() === 'oldmemories021@gmail.com') {
-          parsed.role = 'driver';
-          parsed.name = 'Rishabh';
-          parsed.phone = '+91 98451 90214';
-          parsed.driverId = 'DRV-0214';
-          parsed.vehicleNumber = 'MH-02-EV-0214';
-          parsed.operationalZone = 'Mumbai Metro & Central Corridor';
-          parsed.zone = 'Mumbai Metro & Central Corridor';
-          parsed.hub = 'Central Logistics Hub';
+          if (parsed.role === 'driver') {
+            parsed.name = parsed.name || 'Rishabh';
+            parsed.phone = parsed.phone || '+91 98451 90214';
+            parsed.driverId = parsed.driverId || 'DRV-0214';
+            parsed.vehicleNumber = parsed.vehicleNumber || 'MH-02-EV-0214';
+            parsed.operationalZone = parsed.operationalZone || 'Mumbai Metro & Central Corridor';
+            parsed.zone = parsed.zone || 'Mumbai Metro & Central Corridor';
+            parsed.hub = parsed.hub || 'Central Logistics Hub';
+          }
         }
         if (!parsed.avatarUrl) {
           const restored = getPersistentAvatar(parsed.email, parsed.role);
@@ -67,11 +68,14 @@ export function AppProvider({ children }) {
   });
 
   const [currentRole, setCurrentRole] = useState(() => {
+    const savedRole = localStorage.getItem('aerodispatch_role');
+    if (savedRole && ['admin', 'driver', 'customer'].includes(savedRole)) {
+      return savedRole;
+    }
     const savedUser = localStorage.getItem('aerodispatch_user');
     if (savedUser) {
       try {
         const parsed = JSON.parse(savedUser);
-        if (parsed.email?.toLowerCase() === 'oldmemories021@gmail.com') return 'driver';
         return parsed.role || 'guest';
       } catch (e) {}
     }
@@ -234,7 +238,7 @@ export function AppProvider({ children }) {
       const savedUserStr = localStorage.getItem('aerodispatch_user');
       if (savedUserStr) {
         const u = JSON.parse(savedUserStr);
-        if (u.email?.toLowerCase() === 'oldmemories021@gmail.com') {
+        if (u.email?.toLowerCase() === 'oldmemories021@gmail.com' && u.role === 'driver') {
           let updated = false;
           if ((u.name || '').includes('Pandey')) {
             u.name = 'Rishabh';
@@ -309,6 +313,7 @@ export function AppProvider({ children }) {
               }
               return d;
             });
+          if (cleaned.length === 0) return MASTER_ADMIN_DRIVERS;
           return cleaned;
         }
       }
@@ -1253,6 +1258,10 @@ export function AppProvider({ children }) {
     };
     setNotifications(prev => [statusNotif, ...prev]);
 
+    try {
+      localStorage.setItem('aerodispatch_order_updated', JSON.stringify({ awbNumber, nextStatus, timestamp: Date.now() }));
+    } catch (e) {}
+
     addToast(`Shipment ${awbNumber} updated to ${nextStatus}`, 'success');
   };
 
@@ -1437,6 +1446,9 @@ export function AppProvider({ children }) {
       const res = await apiUploadProofPhoto(awbNumber, file, deliveredTo, otpCode, notes, authToken);
       if (res && res.order) {
         setShipments(prev => prev.map(s => (s.awbNumber === awbNumber ? res.order : s)));
+        try {
+          localStorage.setItem('aerodispatch_order_updated', JSON.stringify({ awbNumber, nextStatus: 'DELIVERED', timestamp: Date.now() }));
+        } catch (e) {}
         addToast('Delivery proof photo uploaded and verified!', 'success');
         return res;
       }

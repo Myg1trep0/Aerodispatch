@@ -601,7 +601,7 @@ export default function ShipmentManagementPage() {
 
               {/* Assigned Captain Card / Customer Card (Context-Aware) */}
               {(() => {
-                const isDriver = currentUser?.role === 'driver' || currentRole === 'driver';
+                const isDriver = (currentRole === 'driver' || (currentUser?.role === 'driver' && currentRole !== 'customer')) && currentRole !== 'customer';
                 const customerName = inspectingShipment.recipient?.name || inspectingShipment.sender?.name || 'Customer';
                 const customerPhone = inspectingShipment.recipient?.phone || inspectingShipment.sender?.phone || '';
                 const customerCity = inspectingShipment.recipient?.city || inspectingShipment.sender?.city || '';

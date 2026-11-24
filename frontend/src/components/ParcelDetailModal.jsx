@@ -23,7 +23,8 @@ import {
   Box,
   CreditCard,
   User,
-  Share2
+  Share2,
+  FileText
 } from 'lucide-react';
 
 export default function ParcelDetailModal({ parcel, onClose }) {
@@ -389,14 +390,8 @@ export default function ParcelDetailModal({ parcel, onClose }) {
           {/* Context-Aware Contact Card (Captain contacting Customer vs Customer contacting Captain) */}
           {(() => {
             const isDriver = 
-              currentUser?.role === 'driver' || 
-              currentRole === 'driver' ||
-              currentUser?.email?.toLowerCase() === 'oldmemories021@gmail.com' ||
-              (parcel.assignedDriver && (
-                parcel.assignedDriver.email?.toLowerCase() === currentUser?.email?.toLowerCase() ||
-                (currentUser?.driverId && parcel.assignedDriver.driverId === currentUser.driverId) ||
-                (currentUser?.name && parcel.assignedDriver.name?.toLowerCase().includes(currentUser.name.toLowerCase()))
-              ));
+              (currentRole === 'driver' || (currentUser?.role === 'driver' && currentRole !== 'customer')) && 
+              currentRole !== 'customer';
 
             const customerName = parcel.recipient?.name || parcel.sender?.name || 'Customer';
             const customerPhone = parcel.recipient?.phone || parcel.sender?.phone || '';

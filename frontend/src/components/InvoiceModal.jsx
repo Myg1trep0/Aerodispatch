@@ -15,9 +15,9 @@ import {
 import { printInvoiceDocument, exportToCSV, formatOrderForCSV, SHIPMENT_CSV_HEADERS } from '../utils/invoiceGenerator';
 
 export default function InvoiceModal({ isOpen, onClose, order }) {
-  if (!isOpen || !order) return null;
-
   const [documentType, setDocumentType] = useState('INVOICE'); // 'INVOICE' | 'RECEIPT'
+
+  if (!isOpen || !order) return null;
 
   const awb = order.awbNumber || order.orderId || 'AD-XXXX-XXXX';
   const dateStr = order.createdAt ? new Date(order.createdAt).toLocaleDateString('en-IN', {

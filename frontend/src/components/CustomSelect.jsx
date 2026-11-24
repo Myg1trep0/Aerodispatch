@@ -20,12 +20,9 @@ export default function CustomSelect({
   const [isOpen, setIsOpen] = useState(false);
   const containerRef = useRef(null);
 
-  // Read theme from context safely
-  let theme = 'dark';
-  try {
-    const app = useApp();
-    if (app?.theme) theme = app.theme;
-  } catch (e) {}
+  // Read theme from context
+  const app = useApp();
+  const theme = app?.theme || 'dark';
 
   // Also verify document body class in case of out-of-react toggle
   const [isLightMode, setIsLightMode] = useState(() => {

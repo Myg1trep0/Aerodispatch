@@ -27,8 +27,6 @@ const DEFAULT_SAMPLE_TICKETS = [
 ];
 
 export default function SupportTicketModal({ isOpen, onClose, shipments = [], currentUser }) {
-  if (!isOpen) return null;
-
   const [tickets, setTickets] = useState(() => {
     try {
       const saved = localStorage.getItem('aerodispatch_support_tickets');
@@ -52,6 +50,8 @@ export default function SupportTicketModal({ isOpen, onClose, shipments = [], cu
   });
 
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  if (!isOpen) return null;
 
   const saveTickets = (next) => {
     setTickets(next);

@@ -82,6 +82,8 @@ except Exception as e:
     order_repo = LocalOrderRepository()
 
 try:
+    if os.getenv("MOCK_AWS") == "true":
+        raise RuntimeError("MOCK_AWS enabled")
     from .services.storage_service import S3StorageService
     s3_bucket_name = os.getenv("UPLOADS_BUCKET_NAME", "aerodispatch-s3-proofs-761112473042")
     storage_service = S3StorageService(bucket_name=s3_bucket_name)
@@ -890,6 +892,16 @@ def rate_consignment(
             detail=f"Consignment '{order_id}' not found.",
         )
     user = get_optional_current_user(request=request, authorization=authorization)
+    if user and user.get("role") in ["driver"]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Drivers cannot rate their own deliveries. Ratings are reserved exclusively for customers.",
+        )
+    if user and user.get("role") in ["admin"]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Administrators cannot submit ratings on behalf of customers.",
+        )
     rated_by = user.get("name") if user else "Verified Customer"
 
     try:

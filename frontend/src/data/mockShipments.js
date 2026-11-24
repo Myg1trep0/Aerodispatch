@@ -16,15 +16,59 @@ export const MASTER_ADMIN_METRICS = {
   deliveredToday: 0,
   failedExceptions: 0,
   onTimeSlaPercentage: 100.0,
-  activeHubs: 0,
-  activeFleetCount: 0
+  activeHubs: 3,
+  activeFleetCount: 1
 };
 export const MOCK_ADMIN_METRICS = MASTER_ADMIN_METRICS;
 
-export const MASTER_ADMIN_HUBS = [];
+export const MASTER_ADMIN_HUBS = [
+  {
+    id: 'HUB-BOM',
+    name: 'Western Air Cargo Hub',
+    city: 'Mumbai',
+    state: 'Maharashtra',
+    status: 'OPERATIONAL',
+    activeCouriers: 1,
+    capacityUsage: 42
+  },
+  {
+    id: 'HUB-DEL',
+    name: 'Northern Linehaul Gateway',
+    city: 'New Delhi',
+    state: 'Delhi NCR',
+    status: 'OPERATIONAL',
+    activeCouriers: 0,
+    capacityUsage: 28
+  },
+  {
+    id: 'HUB-BLR',
+    name: 'Southern Express Terminal',
+    city: 'Bengaluru',
+    state: 'Karnataka',
+    status: 'OPERATIONAL',
+    activeCouriers: 0,
+    capacityUsage: 20
+  }
+];
 export const MOCK_HUBS = MASTER_ADMIN_HUBS;
 
-export const MASTER_ADMIN_DRIVERS = [];
+export const MASTER_ADMIN_DRIVERS = [
+  {
+    id: 'DRV-0214',
+    driverId: 'DRV-0214',
+    name: 'Captain Rishabh',
+    email: 'oldmemories021@gmail.com',
+    phone: '+91 98451 90214',
+    vehicle: 'MH-02-EV-0214',
+    vehicleType: 'Express Electric Cargo Van',
+    operationalZone: 'Mumbai Metro & Central Corridor',
+    zone: 'Mumbai Metro & Central Corridor',
+    hub: 'Western Air Cargo Hub',
+    status: 'AVAILABLE',
+    rating: 5.0,
+    tripsCompleted: 0
+  }
+];
 export const MOCK_DRIVERS = MASTER_ADMIN_DRIVERS;
 
 export const MOCK_NOTIFICATIONS = [];

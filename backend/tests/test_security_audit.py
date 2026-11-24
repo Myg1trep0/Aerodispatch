@@ -50,8 +50,32 @@ class TestSecurityAuditSuite(unittest.TestCase):
         # Create fresh TestClient per test for strict cookie isolation
         self.client = TestClient(app)
         auth_rate_limiter.reset("auth_login:testclient")
-        from src.services.auth_service import SEED_ACCOUNTS
+        from src.services.auth_service import SEED_ACCOUNTS, hash_password_argon2
         auth_service._users = dict(SEED_ACCOUNTS)
+        auth_service._users.update({
+            "aditya.sharma@example.com": {
+                "id": "usr-cust-test-001",
+                "name": "Aditya Sharma",
+                "email": "aditya.sharma@example.com",
+                "role": "customer",
+                "passwordHash": hash_password_argon2("Customer@123"),
+            },
+            "ramesh.kumar@aerodispatch.internal": {
+                "id": "usr-drv-test-001",
+                "driverId": "DRV-504",
+                "name": "Ramesh Kumar",
+                "email": "ramesh.kumar@aerodispatch.internal",
+                "role": "driver",
+                "passwordHash": hash_password_argon2("Driver@123"),
+            },
+            "priya.nair@aerodispatch.internal": {
+                "id": "usr-adm-test-001",
+                "name": "Priya Nair",
+                "email": "priya.nair@aerodispatch.internal",
+                "role": "admin",
+                "passwordHash": hash_password_argon2("Admin@123"),
+            },
+        })
         auth_service._refresh_tokens.clear()
         auth_service._revoked_access_jtis.clear()
         auth_service._reset_tokens.clear()

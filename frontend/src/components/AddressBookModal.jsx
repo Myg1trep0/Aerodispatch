@@ -39,8 +39,6 @@ const DEFAULT_ADDRESS_PRESETS = [
 ];
 
 export default function AddressBookModal({ isOpen, onClose, onSelectAddress, mode = 'manage' }) {
-  if (!isOpen) return null;
-
   const [addresses, setAddresses] = useState(() => {
     try {
       const saved = localStorage.getItem('aerodispatch_address_book');
@@ -65,6 +63,8 @@ export default function AddressBookModal({ isOpen, onClose, onSelectAddress, mod
     address: '',
     isDefault: false
   });
+
+  if (!isOpen) return null;
 
   // Save changes to localStorage whenever addresses update
   const saveAddresses = (newAddresses) => {

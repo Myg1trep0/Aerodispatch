@@ -174,6 +174,52 @@ export default function TrackingPage() {
     }
   }, [trackingQuery, selectedAwb, performSearch]);
 
+  // Reactive Sync: Automatically keep activeShipment updated when shipments in AppContext update (e.g. Captain delivers package)
+  useEffect(() => {
+    if (!activeShipment?.awbNumber) return;
+    const currentAwbLower = activeShipment.awbNumber.toLowerCase();
+    const match = shipments.find(s => 
+      (s.awbNumber && s.awbNumber.toLowerCase() === currentAwbLower) ||
+      (s.orderId && s.orderId.toLowerCase() === currentAwbLower)
+    );
+    if (match) {
+      const sanitized = sanitizeShipment(match);
+      if (
+        sanitized.currentStatus !== activeShipment.currentStatus ||
+        sanitized.status !== activeShipment.status ||
+        JSON.stringify(sanitized.proofOfDelivery) !== JSON.stringify(activeShipment.proofOfDelivery) ||
+        (sanitized.events?.length || 0) !== (activeShipment.events?.length || 0)
+      ) {
+        setActiveShipment(sanitized);
+      }
+    }
+  }, [shipments, activeShipment?.awbNumber, activeShipment?.currentStatus, activeShipment?.status, activeShipment?.proofOfDelivery, activeShipment?.events?.length]);
+
+  // Cross-tab storage synchronization: Instant update if captain delivered in another browser tab
+  useEffect(() => {
+    const handleStorageChange = (e) => {
+      if ((e.key === 'aerodispatch_shipments' || e.key === 'aerodispatch_order_updated') && e.newValue) {
+        try {
+          const updatedList = e.key === 'aerodispatch_shipments' ? JSON.parse(e.newValue) : null;
+          if (Array.isArray(updatedList) && activeShipment?.awbNumber) {
+            const currentAwbLower = activeShipment.awbNumber.toLowerCase();
+            const match = updatedList.find(s => 
+              (s.awbNumber && s.awbNumber.toLowerCase() === currentAwbLower) ||
+              (s.orderId && s.orderId.toLowerCase() === currentAwbLower)
+            );
+            if (match) {
+              setActiveShipment(sanitizeShipment(match));
+            }
+          }
+        } catch (err) {
+          console.warn("Storage sync error:", err);
+        }
+      }
+    };
+    window.addEventListener('storage', handleStorageChange);
+    return () => window.removeEventListener('storage', handleStorageChange);
+  }, [activeShipment?.awbNumber]);
+
   // Connect live WebSocket stream for active shipment
   useEffect(() => {
     const targetAwb = activeShipment?.awbNumber;
@@ -278,6 +324,20 @@ export default function TrackingPage() {
   const handleRatingSubmit = async (e) => {
     e?.preventDefault();
     if (!activeShipment?.awbNumber) return;
+
+    // Strict Role Separation: Drivers and Admins CANNOT rate their own or assigned deliveries
+    const isDriverViewer = (currentRole === 'driver' || (currentUser?.role === 'driver' && currentRole !== 'customer')) && currentRole !== 'customer';
+    const isAdminViewer = currentRole === 'admin' || (currentUser?.role === 'admin' && currentRole !== 'customer');
+
+    if (isDriverViewer) {
+      addToast('Couriers & Drivers cannot rate their own deliveries. Ratings are submitted exclusively by customers.', 'warning');
+      return;
+    }
+    if (isAdminViewer) {
+      addToast('Administrators cannot submit ratings on behalf of customers.', 'warning');
+      return;
+    }
+
     setIsSubmittingRating(true);
     try {
       const res = await apiRateOrder(activeShipment.awbNumber, selectedStars, ratingFeedback);
@@ -287,7 +347,7 @@ export default function TrackingPage() {
         customerRating: {
           rating: selectedStars,
           feedback: ratingFeedback,
-          ratedBy: 'Customer',
+          ratedBy: currentUser?.name || activeShipment.recipient?.name || 'Customer',
           ratedAt: new Date().toISOString()
         }
       };
@@ -690,119 +750,170 @@ export default function TrackingPage() {
             )}
 
             {/* Customer Rating Card for Delivered Consignments */}
-            {(activeShipment.currentStatus === 'DELIVERED' || activeShipment.status === 'delivered') && (
-              <div 
-                id="customer-rating-section"
-                style={{ 
-                  marginTop: '1rem', 
-                  padding: '1.25rem 1.5rem', 
-                  background: 'var(--bg-secondary)', 
-                  border: '1px solid var(--border-medium)', 
-                  borderRadius: 'var(--radius-md)',
-                  boxShadow: '0 4px 16px rgba(0, 0, 0, 0.05)'
-                }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.75rem', marginBottom: '0.75rem' }}>
-                  <div>
-                    <h3 style={{ fontSize: '1rem', fontWeight: 800, margin: 0, display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--text-main)' }}>
-                      <Star size={18} fill="#F59E0B" color="#F59E0B" />
-                      <span>Rate Captain &amp; Delivery Experience</span>
-                    </h3>
-                    <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
-                      Delivered by <strong>{activeShipment.assignedDriver?.name || 'AeroDispatch Delivery Captain'}</strong>
+            {(activeShipment.currentStatus === 'DELIVERED' || activeShipment.status === 'delivered') && (() => {
+              const isDriverViewer = (currentRole === 'driver' || (currentUser?.role === 'driver' && currentRole !== 'customer')) && currentRole !== 'customer';
+              const isAdminViewer = currentRole === 'admin' || (currentUser?.role === 'admin' && currentRole !== 'customer');
+              const canSubmitRating = !isDriverViewer && !isAdminViewer;
+
+              return (
+                <div 
+                  id="customer-rating-section"
+                  style={{ 
+                    marginTop: '1rem', 
+                    padding: '1.25rem 1.5rem', 
+                    background: 'var(--bg-secondary)', 
+                    border: '1px solid var(--border-medium)', 
+                    borderRadius: 'var(--radius-md)',
+                    boxShadow: '0 4px 16px rgba(0, 0, 0, 0.05)'
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.75rem', marginBottom: '0.75rem' }}>
+                    <div>
+                      <h3 style={{ fontSize: '1rem', fontWeight: 800, margin: 0, display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--text-main)' }}>
+                        <Star size={18} fill="#F59E0B" color="#F59E0B" />
+                        <span>
+                          {isDriverViewer
+                            ? 'Customer Rating & Service Review'
+                            : isAdminViewer
+                            ? 'Consignment Customer Feedback & Rating'
+                            : 'Rate Delivery Captain & Experience'}
+                        </span>
+                      </h3>
+                      <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
+                        {isDriverViewer ? (
+                          <>Delivery completed to <strong>{activeShipment.recipient?.name || 'Customer'}</strong> ({activeShipment.recipient?.city || 'Destination'})</>
+                        ) : (
+                          <>Delivered by <strong>{activeShipment.assignedDriver?.name || 'AeroDispatch Delivery Captain'}</strong></>
+                        )}
+                      </div>
                     </div>
+                    {activeShipment.customerRating && (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', background: 'rgba(245, 158, 11, 0.12)', padding: '0.35rem 0.85rem', borderRadius: '9999px', border: '1px solid rgba(245, 158, 11, 0.35)' }}>
+                        <Star size={15} fill="#F59E0B" color="#F59E0B" />
+                        <span style={{ fontWeight: 800, color: '#F59E0B', fontSize: '0.875rem' }}>
+                          {activeShipment.customerRating.rating} / 5 Stars
+                        </span>
+                      </div>
+                    )}
                   </div>
-                  {activeShipment.customerRating && (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', background: 'rgba(245, 158, 11, 0.12)', padding: '0.35rem 0.85rem', borderRadius: '9999px', border: '1px solid rgba(245, 158, 11, 0.35)' }}>
-                      <Star size={15} fill="#F59E0B" color="#F59E0B" />
-                      <span style={{ fontWeight: 800, color: '#F59E0B', fontSize: '0.875rem' }}>
-                        {activeShipment.customerRating.rating} / 5 Stars
-                      </span>
+
+                  {activeShipment.customerRating ? (
+                    <div style={{ background: 'var(--bg-primary)', padding: '0.85rem 1rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)' }}>
+                      <div style={{ display: 'flex', gap: '0.25rem', marginBottom: '0.35rem' }}>
+                        {[1, 2, 3, 4, 5].map((star) => (
+                          <Star 
+                            key={star} 
+                            size={16} 
+                            fill={star <= activeShipment.customerRating.rating ? '#F59E0B' : 'none'} 
+                            color={star <= activeShipment.customerRating.rating ? '#F59E0B' : 'var(--text-dim)'} 
+                          />
+                        ))}
+                      </div>
+                      {activeShipment.customerRating.feedback && (
+                        <p style={{ fontSize: '0.875rem', color: 'var(--text-main)', margin: '0.35rem 0 0 0', fontStyle: 'italic' }}>
+                          "{activeShipment.customerRating.feedback}"
+                        </p>
+                      )}
+                      <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', marginTop: '0.4rem' }}>
+                        Verified feedback by {activeShipment.customerRating.ratedBy || 'Customer'}
+                      </div>
+                    </div>
+                  ) : canSubmitRating ? (
+                    <form onSubmit={handleRatingSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                        <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)', fontWeight: 600 }}>Your Star Rating:</span>
+                        <div style={{ display: 'flex', gap: '0.25rem' }}>
+                          {[1, 2, 3, 4, 5].map((star) => {
+                            const isFilled = (hoveredStars || selectedStars) >= star;
+                            return (
+                              <button
+                                key={star}
+                                type="button"
+                                onClick={() => setSelectedStars(star)}
+                                onMouseEnter={() => setHoveredStars(star)}
+                                onMouseLeave={() => setHoveredStars(0)}
+                                style={{ 
+                                  background: 'transparent', 
+                                  border: 'none', 
+                                  cursor: 'pointer', 
+                                  padding: '0.2rem',
+                                  transition: 'transform 0.15s ease' 
+                                }}
+                                title={`Rate ${star} Star${star > 1 ? 's' : ''}`}
+                              >
+                                <Star 
+                                  size={24} 
+                                  fill={isFilled ? '#F59E0B' : 'transparent'} 
+                                  color={isFilled ? '#F59E0B' : 'var(--text-dim)'} 
+                                />
+                              </button>
+                            );
+                          })}
+                        </div>
+                        <span style={{ fontSize: '0.875rem', fontWeight: 800, color: '#F59E0B', marginLeft: '0.25rem' }}>
+                          {selectedStars} Star{selectedStars > 1 ? 's' : ''}
+                        </span>
+                      </div>
+
+                      <textarea
+                        className="form-input"
+                        rows={2}
+                        placeholder="Share your delivery feedback (e.g. On-time delivery, parcel handled with care, courteous captain)..."
+                        value={ratingFeedback}
+                        onChange={(e) => setRatingFeedback(e.target.value)}
+                        style={{ fontSize: '0.85rem', width: '100%', resize: 'vertical' }}
+                      />
+
+                      <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                        <button
+                          type="submit"
+                          className="btn btn-primary"
+                          disabled={isSubmittingRating}
+                          style={{ padding: '0.45rem 1.4rem', borderRadius: '9999px', fontSize: '0.85rem', fontWeight: 700 }}
+                        >
+                          {isSubmittingRating ? 'Recording Rating...' : 'Submit Rating'}
+                        </button>
+                      </div>
+                    </form>
+                  ) : (
+                    <div style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.85rem',
+                      padding: '0.85rem 1.15rem',
+                      background: 'rgba(245, 158, 11, 0.05)',
+                      border: '1px dashed rgba(245, 158, 11, 0.3)',
+                      borderRadius: 'var(--radius-sm)'
+                    }}>
+                      <div style={{
+                        width: '34px',
+                        height: '34px',
+                        borderRadius: '50%',
+                        background: 'rgba(245, 158, 11, 0.15)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        color: '#F59E0B',
+                        flexShrink: 0
+                      }}>
+                        <Clock size={16} />
+                      </div>
+                      <div>
+                        <div style={{ fontSize: '0.85rem', fontWeight: 700, color: 'var(--text-main)' }}>
+                          Awaiting Customer Rating &amp; Review
+                        </div>
+                        <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '2px' }}>
+                          {isDriverViewer
+                            ? `Ratings are submitted exclusively by recipient ${activeShipment.recipient?.name || 'Customer'}. Drivers cannot rate their own deliveries. When the customer submits their review, their points will display here and update your Captain score.`
+                            : `Pending customer evaluation. Only the registered recipient (${activeShipment.recipient?.name || 'Customer'}) can submit a verified rating.`
+                          }
+                        </div>
+                      </div>
                     </div>
                   )}
                 </div>
-
-                {activeShipment.customerRating ? (
-                  <div style={{ background: 'var(--bg-primary)', padding: '0.85rem 1rem', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)' }}>
-                    <div style={{ display: 'flex', gap: '0.25rem', marginBottom: '0.35rem' }}>
-                      {[1, 2, 3, 4, 5].map((star) => (
-                        <Star 
-                          key={star} 
-                          size={16} 
-                          fill={star <= activeShipment.customerRating.rating ? '#F59E0B' : 'none'} 
-                          color={star <= activeShipment.customerRating.rating ? '#F59E0B' : 'var(--text-dim)'} 
-                        />
-                      ))}
-                    </div>
-                    {activeShipment.customerRating.feedback && (
-                      <p style={{ fontSize: '0.875rem', color: 'var(--text-main)', margin: '0.35rem 0 0 0', fontStyle: 'italic' }}>
-                        "{activeShipment.customerRating.feedback}"
-                      </p>
-                    )}
-                    <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', marginTop: '0.4rem' }}>
-                      Verified feedback by {activeShipment.customerRating.ratedBy || 'Customer'}
-                    </div>
-                  </div>
-                ) : (
-                  <form onSubmit={handleRatingSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-                      <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)', fontWeight: 600 }}>Your Star Rating:</span>
-                      <div style={{ display: 'flex', gap: '0.25rem' }}>
-                        {[1, 2, 3, 4, 5].map((star) => {
-                          const isFilled = (hoveredStars || selectedStars) >= star;
-                          return (
-                            <button
-                              key={star}
-                              type="button"
-                              onClick={() => setSelectedStars(star)}
-                              onMouseEnter={() => setHoveredStars(star)}
-                              onMouseLeave={() => setHoveredStars(0)}
-                              style={{ 
-                                background: 'transparent', 
-                                border: 'none', 
-                                cursor: 'pointer', 
-                                padding: '0.2rem',
-                                transition: 'transform 0.15s ease' 
-                              }}
-                              title={`Rate ${star} Star${star > 1 ? 's' : ''}`}
-                            >
-                              <Star 
-                                size={24} 
-                                fill={isFilled ? '#F59E0B' : 'transparent'} 
-                                color={isFilled ? '#F59E0B' : 'var(--text-dim)'} 
-                              />
-                            </button>
-                          );
-                        })}
-                      </div>
-                      <span style={{ fontSize: '0.875rem', fontWeight: 800, color: '#F59E0B', marginLeft: '0.25rem' }}>
-                        {selectedStars} Star{selectedStars > 1 ? 's' : ''}
-                      </span>
-                    </div>
-
-                    <textarea
-                      className="form-input"
-                      rows={2}
-                      placeholder="Share your delivery feedback (e.g. On-time delivery, parcel handled with care, courteous captain)..."
-                      value={ratingFeedback}
-                      onChange={(e) => setRatingFeedback(e.target.value)}
-                      style={{ fontSize: '0.85rem', width: '100%', resize: 'vertical' }}
-                    />
-
-                    <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                      <button
-                        type="submit"
-                        className="btn btn-primary"
-                        disabled={isSubmittingRating}
-                        style={{ padding: '0.45rem 1.4rem', borderRadius: '9999px', fontSize: '0.85rem', fontWeight: 700 }}
-                      >
-                        {isSubmittingRating ? 'Recording Rating...' : 'Submit Rating'}
-                      </button>
-                    </div>
-                  </form>
-                )}
-              </div>
-            )}
+              );
+            })()}
           </div>
 
           {/* Details & Event Log Grid */}
@@ -836,14 +947,8 @@ export default function TrackingPage() {
                 {/* Context-Aware Contact Card (Captain contacting Customer vs Customer contacting Captain) */}
                 {(() => {
                   const isCaptainUser = 
-                    currentUser?.role === 'driver' || 
-                    currentRole === 'driver' || 
-                    currentUser?.email?.toLowerCase() === 'oldmemories021@gmail.com' ||
-                    (activeShipment.assignedDriver && (
-                      activeShipment.assignedDriver.email?.toLowerCase() === currentUser?.email?.toLowerCase() ||
-                      (currentUser?.driverId && activeShipment.assignedDriver.driverId === currentUser.driverId) ||
-                      (currentUser?.name && activeShipment.assignedDriver.name?.toLowerCase().includes(currentUser.name.toLowerCase()))
-                    ));
+                    (currentRole === 'driver' || (currentUser?.role === 'driver' && currentRole !== 'customer')) && 
+                    currentRole !== 'customer';
 
                   const customerName = activeShipment.recipient?.name || activeShipment.sender?.name || 'Customer';
                   const customerPhone = activeShipment.recipient?.phone || activeShipment.sender?.phone || '';

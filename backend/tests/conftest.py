@@ -21,11 +21,21 @@ def isolate_services_for_testing():
         step_functions_service,
         auth_service,
         order_service,
+        storage_service,
     )
+    from src.services.storage_service import LocalStorageService
     from src.repository import LocalOrderRepository
     from src.services.auth_service import hash_password_argon2
 
-    order_service.repo = LocalOrderRepository()
+    import tempfile
+    test_data_file = os.path.join(tempfile.gettempdir(), "test_conftest_orders.json")
+    if os.path.exists(test_data_file):
+        try:
+            os.remove(test_data_file)
+        except OSError:
+            pass
+    order_service.repo = LocalOrderRepository(data_file=test_data_file)
+    order_service.storage_service = LocalStorageService(".uploads")
     location_service.client = None
     notification_service.ses_client = None
     notification_service.sns_client = None

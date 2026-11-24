@@ -26,7 +26,8 @@ import {
   Navigation,
   CheckCircle,
   Settings,
-  Eye
+  Eye,
+  Star
 } from 'lucide-react';
 import ParcelDetailModal from '../components/ParcelDetailModal';
 import { getConsignmentPhoto } from '../utils/parcelUtils';
