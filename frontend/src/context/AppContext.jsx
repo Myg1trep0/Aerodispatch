@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { 
   MOCK_SHIPMENTS, 
   MOCK_USERS, 
@@ -22,7 +22,9 @@ import {
   apiLogin,
   apiUploadProofPhoto,
   extractDisplayName,
-  apiGetAdminStats
+  apiGetAdminStats,
+  apiGetUserSync,
+  apiSaveUserSync
 } from '../services/api';
 import { 
   ADMIN_DEFAULT_AVATAR,
@@ -41,17 +43,6 @@ export function AppProvider({ children }) {
     if (savedUser) {
       try {
         const parsed = JSON.parse(savedUser);
-        if (parsed.email?.toLowerCase() === 'oldmemories021@gmail.com') {
-          if (parsed.role === 'driver') {
-            parsed.name = parsed.name || 'Rishabh';
-            parsed.phone = parsed.phone || '+91 98451 90214';
-            parsed.driverId = parsed.driverId || 'DRV-0214';
-            parsed.vehicleNumber = parsed.vehicleNumber || 'MH-02-EV-0214';
-            parsed.operationalZone = parsed.operationalZone || 'Mumbai Metro & Central Corridor';
-            parsed.zone = parsed.zone || 'Mumbai Metro & Central Corridor';
-            parsed.hub = parsed.hub || 'Central Logistics Hub';
-          }
-        }
         if (!parsed.avatarUrl) {
           const restored = getPersistentAvatar(parsed.email, parsed.role);
           if (restored) parsed.avatarUrl = restored;
@@ -182,27 +173,14 @@ export function AppProvider({ children }) {
               !(d.vehicle || '').includes('3051') &&
               !(d.vehicleNumber || '').includes('8469') &&
               !(d.vehicleNumber || '').includes('3051')
-            )
-            .map(d => {
-              if (d.email?.toLowerCase() === 'oldmemories021@gmail.com') {
-                return {
-                  ...d,
-                  name: 'Captain Rishabh',
-                  phone: '+91 98451 90214',
-                  id: 'DRV-0214',
-                  driverId: 'DRV-0214',
-                  vehicle: 'MH-02-EV-0214'
-                };
-              }
-              return d;
-            });
+            );
           localStorage.setItem('aerodispatch_fleet_drivers', JSON.stringify(cleaned));
           setDriversList(cleaned);
         }
       }
     } catch (e) {}
 
-    // Auto-purge demo drivers from registered users cache & clean real user entries
+    // Auto-purge demo drivers from registered users cache
     try {
       const savedReg = localStorage.getItem('aerodispatch_registered_users');
       if (savedReg) {
@@ -215,51 +193,8 @@ export function AppProvider({ children }) {
               !(u.phone || '').includes('90042') && 
               !(u.phone || '').includes('90043') &&
               !(u.name || '').toLowerCase().includes('pandey')
-            )
-            .map(u => {
-              if (u.email?.toLowerCase() === 'oldmemories021@gmail.com') {
-                return {
-                  ...u,
-                  name: 'Rishabh',
-                  phone: (u.phone && !u.phone.includes('9004')) ? u.phone : '+91 98451 90214',
-                  driverId: (u.driverId && u.driverId !== 'DRV-8469') ? u.driverId : 'DRV-0214',
-                  vehicleNumber: (u.vehicleNumber && !u.vehicleNumber.includes('8469')) ? u.vehicleNumber : 'MH-02-EV-0214'
-                };
-              }
-              return u;
-            });
+            );
           localStorage.setItem('aerodispatch_registered_users', JSON.stringify(cleaned));
-        }
-      }
-    } catch (e) {}
-
-    // Auto-clean active logged-in user profile if it had stale demo data
-    try {
-      const savedUserStr = localStorage.getItem('aerodispatch_user');
-      if (savedUserStr) {
-        const u = JSON.parse(savedUserStr);
-        if (u.email?.toLowerCase() === 'oldmemories021@gmail.com' && u.role === 'driver') {
-          let updated = false;
-          if ((u.name || '').includes('Pandey')) {
-            u.name = 'Rishabh';
-            updated = true;
-          }
-          if ((u.phone || '').includes('90042') || (u.phone || '').includes('90043') || !u.phone) {
-            u.phone = '+91 98451 90214';
-            updated = true;
-          }
-          if (u.driverId === 'DRV-8469' || u.driverId === 'DRV-658' || !u.driverId) {
-            u.driverId = 'DRV-0214';
-            updated = true;
-          }
-          if (u.vehicleNumber === 'MH-02-EV-8469' || !u.vehicleNumber) {
-            u.vehicleNumber = 'MH-02-EV-0214';
-            updated = true;
-          }
-          if (updated) {
-            localStorage.setItem('aerodispatch_user', JSON.stringify(u));
-            setCurrentUser(u);
-          }
         }
       }
     } catch (e) {}
@@ -296,23 +231,7 @@ export function AppProvider({ children }) {
               !(d.vehicle || '').includes('3051') &&
               !(d.vehicleNumber || '').includes('8469') &&
               !(d.vehicleNumber || '').includes('3051')
-            )
-            .map(d => {
-              if (d.email?.toLowerCase() === 'oldmemories021@gmail.com') {
-                return {
-                  ...d,
-                  name: 'Captain Rishabh',
-                  phone: '+91 98451 90214',
-                  id: 'DRV-0214',
-                  driverId: 'DRV-0214',
-                  vehicle: 'MH-02-EV-0214',
-                  vehicleType: 'Electric Cargo Van',
-                  operationalZone: 'Mumbai Metro & Central Corridor',
-                  hub: 'Central Logistics Hub'
-                };
-              }
-              return d;
-            });
+            );
           if (cleaned.length === 0) return MASTER_ADMIN_DRIVERS;
           return cleaned;
         }
@@ -428,18 +347,23 @@ export function AppProvider({ children }) {
     if (currentUser.role === 'driver') {
       const dId = currentUser.driverId;
       const dName = (currentUser.name || '').toLowerCase();
-      if (!dId && !dName) return [];
-      // Driver sees shipments assigned to their driverId/name, OR newly created unassigned consignments ready for pickup
-      return shipments.filter(s => 
-        (dId && s.assignedDriver && s.assignedDriver.driverId === dId) ||
-        (dName && s.assignedDriver && s.assignedDriver.name?.toLowerCase() === dName) ||
-        (!s.assignedDriver && (s.currentStatus === 'BOOKED' || s.currentStatus === 'PICKUP_SCHEDULED'))
-      );
+      const dPhone10 = (currentUser.phone || currentUser.phoneNumber || '').replace(/\D/g, '').slice(-10);
+      if (!dId && !dName && dPhone10.length < 10) return [];
+      // Driver sees shipments assigned to their driverId/phone/name, OR newly created unassigned consignments ready for pickup
+      return shipments.filter(s => {
+        const drvPhone10 = (s.assignedDriver?.phone || '').replace(/\D/g, '').slice(-10);
+        return (
+          (dId && s.assignedDriver && s.assignedDriver.driverId === dId) ||
+          (dPhone10.length >= 10 && drvPhone10 === dPhone10) ||
+          (dName && s.assignedDriver && s.assignedDriver.name?.toLowerCase() === dName) ||
+          (!s.assignedDriver && (s.currentStatus === 'BOOKED' || s.currentStatus === 'PICKUP_SCHEDULED'))
+        );
+      });
     }
     if (currentUser.role === 'customer') {
       const email = (currentUser.email || '').toLowerCase().trim();
       const name = (currentUser.name || '').toLowerCase().trim();
-      const phone = (currentUser.phone || currentUser.phoneNumber || '').replace(/\D/g, '');
+      const phone10 = (currentUser.phone || currentUser.phoneNumber || '').replace(/\D/g, '').slice(-10);
 
       return shipments.filter(s => {
         const custEmail = (s.customerEmail || '').toLowerCase().trim();
@@ -448,9 +372,9 @@ export function AppProvider({ children }) {
         if (email && (custEmail === email || senderEmail === email || recipientEmail === email)) {
           return true;
         }
-        const sPhone = (s.sender?.phone || '').replace(/\D/g, '');
-        const rPhone = (s.recipient?.phone || '').replace(/\D/g, '');
-        if (phone && phone.length >= 6 && (sPhone.endsWith(phone) || rPhone.endsWith(phone) || phone.endsWith(sPhone) || phone.endsWith(rPhone))) {
+        const sPhone10 = (s.sender?.phone || '').replace(/\D/g, '').slice(-10);
+        const rPhone10 = (s.recipient?.phone || '').replace(/\D/g, '').slice(-10);
+        if (phone10.length >= 10 && (sPhone10 === phone10 || rPhone10 === phone10)) {
           return true;
         }
         const sName = (s.sender?.name || '').toLowerCase().trim();
@@ -463,6 +387,144 @@ export function AppProvider({ children }) {
     }
     return [];
   }, [shipments, currentUser]);
+
+  const syncInFlightRef = useRef(false);
+
+  const syncCloudUserData = useCallback(async (partialUpdates = {}, explicitToken = null) => {
+    const tokenToUse = explicitToken || authToken || (typeof localStorage !== 'undefined' ? (localStorage.getItem('aerodispatch_token') || localStorage.getItem('aerodispatch_access_token')) : '');
+    if (!tokenToUse) return null;
+    const payload = {};
+    for (const key of ['name', 'phone', 'company', 'timezone', 'avatarUrl', 'addressBook', 'supportTickets']) {
+      if (partialUpdates[key] !== undefined && partialUpdates[key] !== null) {
+        payload[key] = partialUpdates[key];
+      }
+    }
+    if (Object.keys(payload).length === 0) return null;
+    try {
+      return await apiSaveUserSync(payload, tokenToUse);
+    } catch (e) {
+      console.warn("Cloud user sync notice:", e);
+      return null;
+    }
+  }, [authToken]);
+
+  const applyCloudProfile = useCallback((syncRes, baseUser = null) => {
+    if (!syncRes) return null;
+    const backendUser = syncRes.user || {};
+    const profile = syncRes.profile || {};
+    const targetEmail = (backendUser.email || baseUser?.email || '').toLowerCase().trim();
+
+    if (Array.isArray(profile.addressBook)) {
+      try {
+        localStorage.setItem('aerodispatch_address_book', JSON.stringify(profile.addressBook));
+      } catch (e) {}
+    }
+    if (Array.isArray(profile.supportTickets)) {
+      try {
+        localStorage.setItem('aerodispatch_support_tickets', JSON.stringify(profile.supportTickets));
+      } catch (e) {}
+    }
+    if (profile.avatarUrl && targetEmail) {
+      savePersistentAvatar(targetEmail, backendUser.role || baseUser?.role || 'customer', profile.avatarUrl);
+    }
+
+    let mergedUser = null;
+    setCurrentUser(prev => {
+      const ref = baseUser || prev;
+      if (!ref && !targetEmail) return prev;
+      const mergedRole = backendUser.role || ref?.role || 'customer';
+      const candidate = {
+        ...(ref || {}),
+        email: targetEmail || ref?.email || '',
+        role: mergedRole,
+        name: getCleanDisplayName({
+          ...(ref || {}),
+          name: profile.name || backendUser.name || ref?.name,
+          email: targetEmail || ref?.email
+        }, mergedRole),
+        phone: profile.phone || backendUser.phone || ref?.phone || '',
+        company: profile.company ?? ref?.company,
+        timezone: profile.timezone ?? ref?.timezone,
+        avatarUrl: profile.avatarUrl || ref?.avatarUrl || getPersistentAvatar(targetEmail, mergedRole),
+        driverId: mergedRole === 'driver' ? (backendUser.driverId || ref?.driverId) : undefined,
+      };
+      if (mergedRole !== 'driver') {
+        delete candidate.driverId;
+        delete candidate.vehicleNumber;
+      }
+      if (
+        prev &&
+        prev.email === candidate.email &&
+        prev.role === candidate.role &&
+        prev.name === candidate.name &&
+        prev.phone === candidate.phone &&
+        prev.company === candidate.company &&
+        prev.timezone === candidate.timezone &&
+        prev.avatarUrl === candidate.avatarUrl &&
+        prev.driverId === candidate.driverId
+      ) {
+        mergedUser = prev;
+        return prev;
+      }
+      try {
+        localStorage.setItem('aerodispatch_user', JSON.stringify(candidate));
+        if (candidate.role) localStorage.setItem('aerodispatch_role', candidate.role);
+        if (targetEmail) {
+          const profs = JSON.parse(localStorage.getItem('aerodispatch_user_profiles') || '{}');
+          profs[targetEmail] = {
+            ...(profs[targetEmail] || {}),
+            name: candidate.name,
+            phone: candidate.phone,
+            company: candidate.company,
+            timezone: candidate.timezone,
+          };
+          localStorage.setItem('aerodispatch_user_profiles', JSON.stringify(profs));
+        }
+      } catch (e) {}
+      mergedUser = candidate;
+      return candidate;
+    });
+
+    if (backendUser.role && (!baseUser || baseUser.role !== 'admin')) {
+      setCurrentRole(backendUser.role);
+    }
+    return mergedUser;
+  }, []);
+
+  const syncNotificationsFromShipments = useCallback((shipmentList, roleForNotifs = 'customer') => {
+    if (!Array.isArray(shipmentList) || shipmentList.length === 0) return;
+    const derived = [];
+    shipmentList.forEach(s => {
+      if (!s?.awbNumber) return;
+      const latestEv = Array.isArray(s.events) && s.events.length > 0 ? s.events[s.events.length - 1] : null;
+      const st = s.currentStatus || s.status || 'BOOKED';
+      derived.push({
+        id: `cloud-notif-${s.awbNumber}-${st}`,
+        targetRole: roleForNotifs === 'driver' ? 'driver' : 'customer',
+        category: st === 'DELIVERED' ? 'delivered' : (st === 'OUT_FOR_DELIVERY' ? 'assignment' : 'shipment'),
+        title: `${s.awbNumber}: ${st.replace(/_/g, ' ')}`,
+        message: latestEv?.notes || `${s.sender?.city || 'Origin'} -> ${s.recipient?.city || 'Destination'} • ${latestEv?.title || st}`,
+        time: latestEv?.timestamp || 'Synced',
+        awbNumber: s.awbNumber,
+        read: st === 'DELIVERED',
+        severity: st === 'DELIVERED' ? 'success' : 'info'
+      });
+    });
+
+    setNotifications(prev => {
+      const preserved = (Array.isArray(prev) ? prev : []).filter(
+        n => n && !String(n.id || '').startsWith('notif-10') && !String(n.id || '').startsWith('cloud-notif-')
+      );
+      const map = new Map();
+      derived.forEach(n => map.set(n.id, n));
+      preserved.forEach(n => map.set(n.id, n));
+      const merged = Array.from(map.values());
+      try {
+        localStorage.setItem('aerodispatch_notifications', JSON.stringify(merged));
+      } catch (e) {}
+      return merged;
+    });
+  }, []);
 
   // Auth Guard Helper for landing and public actions
   const requireAuth = (targetTab, requiredRole = null) => {
@@ -483,9 +545,16 @@ export function AppProvider({ children }) {
     setCurrentUser(null);
     setAuthToken('');
     setCurrentRole('guest');
+    setShipments([]);
+    setNotifications(MOCK_NOTIFICATIONS);
     localStorage.removeItem('aerodispatch_user');
     localStorage.removeItem('aerodispatch_token');
+    localStorage.removeItem('aerodispatch_role');
     localStorage.removeItem('aerodispatch_activeTab');
+    localStorage.removeItem('aerodispatch_shipments');
+    localStorage.removeItem('aerodispatch_address_book');
+    localStorage.removeItem('aerodispatch_support_tickets');
+    localStorage.removeItem('aerodispatch_notifications');
     setActiveTab('landing');
     addToast('You have been signed out safely. Returned to public portal.', 'info');
   };
@@ -521,6 +590,7 @@ export function AppProvider({ children }) {
         localStorage.setItem('aerodispatch_user', JSON.stringify(updated));
       } catch (e) {}
       savePersistentAvatar(currentUser.email, currentUser.role, null);
+      syncCloudUserData({ avatarUrl: '' });
       addToast('Profile photo removed.', 'info');
       return;
     }
@@ -539,10 +609,13 @@ export function AppProvider({ children }) {
       console.warn("Storage warning for user session:", e);
     }
 
-    // 2. Save to persistent avatar vault (keyed by email, role, and global fallback)
+    // 2. Save to persistent avatar vault (keyed by email)
     savePersistentAvatar(currentUser.email, currentUser.role, finalAvatar);
 
-    // 3. Update registered users list if present
+    // 3. Persist to DynamoDB cloud sync
+    syncCloudUserData({ avatarUrl: finalAvatar });
+
+    // 4. Update registered users list if present
     try {
       const reg = JSON.parse(localStorage.getItem('aerodispatch_registered_users') || '[]');
       const updatedReg = reg.map(u => {
@@ -554,7 +627,7 @@ export function AppProvider({ children }) {
       localStorage.setItem('aerodispatch_registered_users', JSON.stringify(updatedReg));
     } catch (e) {}
 
-    // 4. If driver, update driver fleet list as well
+    // 5. If driver, update driver fleet list as well
     if (currentUser.role === 'driver' || currentUser.driverId) {
       setDriversList(prev => {
         const next = prev.map(d => {
@@ -601,7 +674,10 @@ export function AppProvider({ children }) {
       localStorage.setItem('aerodispatch_user_profiles', JSON.stringify(profs));
     } catch (e) {}
 
-    // 2. Update in registered users list
+    // 2. Sync to AWS cloud profile
+    syncCloudUserData({ ...updatedFields, name: nextUser.name });
+
+    // 3. Update in registered users list
     try {
       const reg = JSON.parse(localStorage.getItem('aerodispatch_registered_users') || '[]');
       const updatedReg = reg.map(u => {
@@ -613,7 +689,7 @@ export function AppProvider({ children }) {
       localStorage.setItem('aerodispatch_registered_users', JSON.stringify(updatedReg));
     } catch (e) {}
 
-    // 3. If driver, update fleet list
+    // 4. If driver, update fleet list
     if (nextUser.role === 'driver' || nextUser.driverId) {
       setDriversList(prev => {
         const next = prev.map(d => {
@@ -740,11 +816,13 @@ export function AppProvider({ children }) {
     setToasts(prev => prev.filter(t => t.id !== id));
   }, []);
 
-  // Sync shipments from backend with visual skeleton shimmer loading
-  // When refresh button is clicked: strictly 1.5s skeleton effect as requested
-  const refreshBackendOrders = useCallback(async () => {
+  // Sync shipments & profile from backend with visual skeleton shimmer loading
+  const refreshBackendOrders = useCallback(async (options = {}) => {
+    const isSilent = options && options.silent === true;
+    if (isSilent && syncInFlightRef.current) return;
+    syncInFlightRef.current = true;
     setIsLoadingOrders(true);
-    const minDelay = new Promise(resolve => setTimeout(resolve, 1500)); // Exactly 1.5s skeleton effect
+    const minDelay = isSilent ? Promise.resolve() : new Promise(resolve => setTimeout(resolve, 1500));
     try {
       if (currentUser?.role === 'admin') {
         fetchAdminStats().catch(() => {});
@@ -762,13 +840,27 @@ export function AppProvider({ children }) {
             console.warn("Could not exchange admin token:", e);
           }
         }
-        const res = await apiListOrders({ 
-          role: currentUser.role, 
-          token: tokenToUse,
-          email: currentUser.email 
-        });
-        if (res && Array.isArray(res.data) && res.data.length > 0) {
-          const freshShipments = res.data.map(sanitizeShipment);
+
+        const [ordersResult, profileResult] = await Promise.allSettled([
+          apiListOrders({
+            role: currentUser.role,
+            token: tokenToUse,
+            email: currentUser.email
+          }),
+          apiGetUserSync(tokenToUse)
+        ]);
+
+        if (profileResult.status === 'fulfilled' && profileResult.value) {
+          setIsBackendOnline(true);
+          applyCloudProfile(profileResult.value, currentUser);
+        }
+
+        if (ordersResult.status === 'fulfilled' && ordersResult.value && Array.isArray(ordersResult.value.data)) {
+          setIsBackendOnline(true);
+          const freshShipments = ordersResult.value.data.map(sanitizeShipment);
+          const effectiveRole = profileResult.status === 'fulfilled' && profileResult.value?.user?.role
+            ? profileResult.value.user.role
+            : currentUser.role;
           setShipments(prev => {
             const map = new Map();
             (prev || []).forEach(o => {
@@ -781,25 +873,30 @@ export function AppProvider({ children }) {
             try {
               localStorage.setItem('aerodispatch_shipments', JSON.stringify(merged));
             } catch (e) {}
+            syncNotificationsFromShipments(merged, effectiveRole);
             return merged;
           });
         }
       }
       await minDelay;
-      addToast('Refreshed shipments and live status!', 'info');
+      if (!isSilent) {
+        addToast('Refreshed shipments and live status!', 'info');
+      }
     } catch (e) {
       console.warn("Could not sync orders from backend, using current state:", e);
       await minDelay;
     } finally {
+      syncInFlightRef.current = false;
       setIsLoadingOrders(false);
     }
-  }, [currentUser, authToken, addToast]);
+  }, [currentUser, authToken, addToast, applyCloudProfile, syncNotificationsFromShipments, fetchAdminStats]);
 
   useEffect(() => {
-    if (currentUser) {
-      refreshBackendOrders();
+    if (currentUser?.email) {
+      refreshBackendOrders({ silent: true });
     }
-  }, [currentUser, refreshBackendOrders]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentUser?.email, currentUser?.role]);
 
   // Role switching is strictly restricted to operations preview
   const switchRole = async (newRole) => {
@@ -896,9 +993,11 @@ export function AppProvider({ children }) {
     }
 
     if (authUser) {
-      // Guarantee driver role & operational zone if logging in through Driver Portal or Driver email
-      if (expectedRole === 'driver' || authUser.role === 'driver' || email.toLowerCase().includes('driver')) {
-        authUser.role = 'driver';
+      // Only promote to driver when role is driver or no role was set and driver email/portal requested
+      if (!authUser.role) {
+        authUser.role = expectedRole || (cleanEmail.includes('driver') ? 'driver' : 'customer');
+      }
+      if (authUser.role === 'driver') {
         const phoneTail = (authUser.phone || '').replace(/\D/g, '').slice(-4);
         if (!authUser.driverId) authUser.driverId = `DRV-${phoneTail || Math.floor(100 + Math.random() * 900)}`;
         if (!authUser.vehicleNumber) authUser.vehicleNumber = `MH-02-EV-${phoneTail || Math.floor(1000 + Math.random() * 9000)}`;
@@ -907,7 +1006,7 @@ export function AppProvider({ children }) {
         if (!authUser.hub) authUser.hub = 'Central Cargo Hub';
       }
 
-      // Reattach persistent avatar photo if user previously uploaded one!
+      // Reattach persistent avatar photo if user previously uploaded one
       if (!authUser.avatarUrl) {
         const savedAvatar = getPersistentAvatar(authUser.email, authUser.role);
         if (savedAvatar) {
@@ -920,34 +1019,62 @@ export function AppProvider({ children }) {
       // Guarantee clean human Full Name instead of raw email address/handle
       authUser.name = getCleanDisplayName(authUser, authUser.role);
 
+      // Clear previous account's browser-cached state if switching accounts
+      const prevEmail = currentUser?.email?.toLowerCase().trim();
+      if (prevEmail && prevEmail !== authUser.email?.toLowerCase().trim()) {
+        setShipments([]);
+        localStorage.removeItem('aerodispatch_shipments');
+        localStorage.removeItem('aerodispatch_address_book');
+        localStorage.removeItem('aerodispatch_support_tickets');
+        localStorage.removeItem('aerodispatch_notifications');
+      }
+
+      if (token) localStorage.setItem('aerodispatch_token', token);
+      localStorage.setItem('aerodispatch_role', authUser.role);
+      localStorage.setItem('aerodispatch_user', JSON.stringify(authUser));
       setAuthToken(token);
       setCurrentRole(authUser.role);
       setCurrentUser(authUser);
-      localStorage.setItem('aerodispatch_user', JSON.stringify(authUser));
-      if (token) localStorage.setItem('aerodispatch_token', token);
 
-      // Cross-Device Synchronization: Fetch real account shipments from backend cloud immediately on login
+      // Cross-Device Synchronization: Fetch real account shipments & cloud profile immediately on login
+      syncInFlightRef.current = true;
       try {
-        const orderRes = await apiListOrders({ 
-          role: authUser.role, 
-          token: token,
-          email: authUser.email 
-        });
-        if (orderRes && Array.isArray(orderRes.data) && orderRes.data.length > 0) {
-          const freshShipments = orderRes.data.map(sanitizeShipment);
+        const [ordersResult, profileResult] = await Promise.allSettled([
+          apiListOrders({
+            role: authUser.role,
+            token: token,
+            email: authUser.email
+          }),
+          apiGetUserSync(token)
+        ]);
+
+        let effectiveUser = authUser;
+        if (profileResult.status === 'fulfilled' && profileResult.value) {
+          setIsBackendOnline(true);
+          const merged = applyCloudProfile(profileResult.value, authUser);
+          if (merged) effectiveUser = merged;
+        }
+
+        if (ordersResult.status === 'fulfilled' && ordersResult.value && Array.isArray(ordersResult.value.data)) {
+          setIsBackendOnline(true);
+          const freshShipments = ordersResult.value.data.map(sanitizeShipment);
           setShipments(prev => {
             const map = new Map();
-            (prev || []).forEach(s => { if (s.awbNumber) map.set(s.awbNumber, s); });
-            freshShipments.forEach(s => { if (s.awbNumber) map.set(s.awbNumber, s); });
+            (prev || []).forEach(s => { if (s.awbNumber && s.awbNumber !== 'AD-8849-2041') map.set(s.awbNumber, s); });
+            freshShipments.forEach(s => { if (s.awbNumber && s.awbNumber !== 'AD-8849-2041') map.set(s.awbNumber, s); });
             const merged = Array.from(map.values()).map(sanitizeShipment);
             try {
               localStorage.setItem('aerodispatch_shipments', JSON.stringify(merged));
             } catch (e) {}
+            syncNotificationsFromShipments(merged, effectiveUser.role);
             return merged;
           });
         }
+        authUser = effectiveUser;
       } catch (syncErr) {
         console.warn("Cloud sync on login notice:", syncErr);
+      } finally {
+        syncInFlightRef.current = false;
       }
 
       // Trigger role-specific entrance animation without heavy background
@@ -1098,35 +1225,58 @@ export function AppProvider({ children }) {
     };
 
     const token = `google-sso-token-${Date.now()}`;
-    setCurrentUser(authUser);
-    setCurrentRole(authUser.role);
-    setAuthToken(token);
-    localStorage.setItem('aerodispatch_user', JSON.stringify(authUser));
+    const prevEmail = currentUser?.email?.toLowerCase().trim();
+    if (prevEmail && prevEmail !== authUser.email?.toLowerCase().trim()) {
+      setShipments([]);
+      localStorage.removeItem('aerodispatch_shipments');
+      localStorage.removeItem('aerodispatch_address_book');
+      localStorage.removeItem('aerodispatch_support_tickets');
+      localStorage.removeItem('aerodispatch_notifications');
+    }
+
     localStorage.setItem('aerodispatch_token', token);
     localStorage.setItem('aerodispatch_role', authUser.role);
+    localStorage.setItem('aerodispatch_user', JSON.stringify(authUser));
+    setAuthToken(token);
+    setCurrentRole(authUser.role);
+    setCurrentUser(authUser);
 
     // Cross-Device Synchronization on Google Login
+    syncInFlightRef.current = true;
     try {
-      const orderRes = await apiListOrders({ 
-        role: authUser.role, 
-        token: token,
-        email: authUser.email 
-      });
-      if (orderRes && Array.isArray(orderRes.data) && orderRes.data.length > 0) {
-        const freshShipments = orderRes.data.map(sanitizeShipment);
+      const [ordersResult, profileResult] = await Promise.allSettled([
+        apiListOrders({
+          role: authUser.role,
+          token: token,
+          email: authUser.email
+        }),
+        apiGetUserSync(token)
+      ]);
+
+      if (profileResult.status === 'fulfilled' && profileResult.value) {
+        setIsBackendOnline(true);
+        applyCloudProfile(profileResult.value, authUser);
+      }
+
+      if (ordersResult.status === 'fulfilled' && ordersResult.value && Array.isArray(ordersResult.value.data)) {
+        setIsBackendOnline(true);
+        const freshShipments = ordersResult.value.data.map(sanitizeShipment);
         setShipments(prev => {
           const map = new Map();
-          (prev || []).forEach(s => { if (s.awbNumber) map.set(s.awbNumber, s); });
-          freshShipments.forEach(s => { if (s.awbNumber) map.set(s.awbNumber, s); });
+          (prev || []).forEach(s => { if (s.awbNumber && s.awbNumber !== 'AD-8849-2041') map.set(s.awbNumber, s); });
+          freshShipments.forEach(s => { if (s.awbNumber && s.awbNumber !== 'AD-8849-2041') map.set(s.awbNumber, s); });
           const merged = Array.from(map.values()).map(sanitizeShipment);
           try {
             localStorage.setItem('aerodispatch_shipments', JSON.stringify(merged));
           } catch (e) {}
+          syncNotificationsFromShipments(merged, authUser.role);
           return merged;
         });
       }
     } catch (syncErr) {
       console.warn("Google SSO cloud sync notice:", syncErr);
+    } finally {
+      syncInFlightRef.current = false;
     }
 
     const destTab = authUser.role === 'driver' ? 'driver' : 'shipments';
@@ -1139,24 +1289,28 @@ export function AppProvider({ children }) {
   const addShipment = async (formData) => {
     let finalOrder = null;
 
-    if (isBackendOnline) {
-      try {
-        const tokenToUse = authToken || (typeof localStorage !== 'undefined' ? (localStorage.getItem('aerodispatch_token') || localStorage.getItem('aerodispatch_access_token')) : '');
-        const res = await apiCreateOrder(formData, null, tokenToUse);
-        finalOrder = sanitizeShipment(res.data);
-        setShipments(prev => {
-          const next = [finalOrder, ...prev.filter(s => s.awbNumber !== finalOrder.awbNumber)];
-          try {
-            localStorage.setItem('aerodispatch_shipments', JSON.stringify(next));
-          } catch (e) {}
-          return next;
-        });
-        setSelectedAwb(finalOrder.awbNumber);
-        addToast(`Shipment ${finalOrder.awbNumber} created successfully!`, 'success');
-      } catch (e) {
-        console.warn("Backend order creation error, falling back to local simulation:", e);
-        addToast(`Order Notice: ${e.message || 'Saved in local mode'}`, 'warning');
-      }
+    try {
+      const tokenToUse = authToken || (typeof localStorage !== 'undefined' ? (localStorage.getItem('aerodispatch_token') || localStorage.getItem('aerodispatch_access_token')) : '');
+      const orderPayload = {
+        ...formData,
+        customerEmail: (formData.customerEmail || currentUser?.email || formData.senderEmail || '').trim().toLowerCase(),
+        senderEmail: (formData.senderEmail || currentUser?.email || formData.customerEmail || '').trim().toLowerCase(),
+      };
+      const res = await apiCreateOrder(orderPayload, null, tokenToUse);
+      setIsBackendOnline(true);
+      finalOrder = sanitizeShipment(res.data);
+      setShipments(prev => {
+        const next = [finalOrder, ...prev.filter(s => s.awbNumber !== finalOrder.awbNumber)];
+        try {
+          localStorage.setItem('aerodispatch_shipments', JSON.stringify(next));
+        } catch (e) {}
+        return next;
+      });
+      setSelectedAwb(finalOrder.awbNumber);
+      addToast(`Shipment ${finalOrder.awbNumber} created successfully!`, 'success');
+    } catch (e) {
+      console.warn("Backend order creation error, falling back to local simulation:", e);
+      addToast(`Order Notice: ${e.message || 'Saved in local mode'}`, 'warning');
     }
 
     if (!finalOrder) {
@@ -1275,19 +1429,30 @@ export function AppProvider({ children }) {
   // Update status (e.g. driver delivery action or admin status override)
   const updateShipmentStatus = async (awbNumber, nextStatus, customNotes = '', proofData = null) => {
     let backendSuccess = false;
-    if (isBackendOnline) {
-      try {
-        const isAdmin = currentRole === 'admin';
-        const res = await apiUpdateStatus(awbNumber, nextStatus, customNotes, proofData, authToken, isAdmin);
-        if (res && res.data) {
-          setShipments(prev => prev.map(ship => (ship.awbNumber === awbNumber ? res.data : ship)));
-          backendSuccess = true;
-        }
-      } catch (e) {
+    const tokenToUse = authToken || (typeof localStorage !== 'undefined' ? (localStorage.getItem('aerodispatch_token') || localStorage.getItem('aerodispatch_access_token')) : '');
+    try {
+      const isAdmin = currentRole === 'admin';
+      const res = await apiUpdateStatus(awbNumber, nextStatus, customNotes, proofData, tokenToUse, isAdmin);
+      if (res && res.data) {
+        setIsBackendOnline(true);
+        const updatedOrder = sanitizeShipment(res.data);
+        setShipments(prev => {
+          const next = prev.map(ship => (ship.awbNumber === awbNumber ? updatedOrder : ship));
+          try {
+            localStorage.setItem('aerodispatch_shipments', JSON.stringify(next));
+          } catch (e) {}
+          return next;
+        });
+        backendSuccess = true;
+      }
+    } catch (e) {
+      const isNetworkErr = e?.name === 'TypeError' || String(e?.message || '').toLowerCase().includes('fetch');
+      if (!isNetworkErr) {
         console.warn("Backend status update error:", e);
         addToast(`Backend rejected: ${e.message}`, 'warning');
         return;
       }
+      console.warn("Network offline on status update, saving locally:", e);
     }
 
     if (!backendSuccess) {
@@ -1312,26 +1477,32 @@ export function AppProvider({ children }) {
         location = "Regional Transit Route";
       }
 
-      setShipments(prev => prev.map(ship => {
-        if (ship.awbNumber === awbNumber) {
-          const newEvent = {
-            id: `ev-${Date.now()}`,
-            status: nextStatus,
-            title,
-            location,
-            timestamp: formattedDate,
-            notes: customNotes || `Status advanced to ${nextStatus}`
-          };
+      setShipments(prev => {
+        const next = prev.map(ship => {
+          if (ship.awbNumber === awbNumber) {
+            const newEvent = {
+              id: `ev-${Date.now()}`,
+              status: nextStatus,
+              title,
+              location,
+              timestamp: formattedDate,
+              notes: customNotes || `Status advanced to ${nextStatus}`
+            };
 
-          return {
-            ...ship,
-            currentStatus: nextStatus,
-            proofOfDelivery: proofData || ship.proofOfDelivery,
-            events: [...ship.events, newEvent]
-          };
-        }
-        return ship;
-      }));
+            return {
+              ...ship,
+              currentStatus: nextStatus,
+              proofOfDelivery: proofData || ship.proofOfDelivery,
+              events: [...(ship.events || []), newEvent]
+            };
+          }
+          return ship;
+        });
+        try {
+          localStorage.setItem('aerodispatch_shipments', JSON.stringify(next));
+        } catch (e) {}
+        return next;
+      });
     }
 
     // Trigger role-specific notifications
@@ -1357,35 +1528,51 @@ export function AppProvider({ children }) {
 
   // Assign driver to shipment
   const assignDriverToOrder = async (awbNumber, driverInfo) => {
-    if (isBackendOnline) {
-      try {
-        const res = await apiAssignDriver(awbNumber, driverInfo, authToken);
-        if (res && res.data) {
-          setShipments(prev => prev.map(s => (s.awbNumber === awbNumber ? sanitizeShipment(res.data) : s)));
-          addToast(`Driver ${driverInfo.name} assigned successfully!`, 'success');
-        }
-      } catch (e) {
-        console.warn("Backend driver assignment failed:", e);
-        addToast(`Could not assign driver: ${e.message}`, 'warning');
+    const tokenToUse = authToken || (typeof localStorage !== 'undefined' ? (localStorage.getItem('aerodispatch_token') || localStorage.getItem('aerodispatch_access_token')) : '');
+    let assignedOnBackend = false;
+    try {
+      const res = await apiAssignDriver(awbNumber, driverInfo, tokenToUse);
+      if (res && res.data) {
+        setIsBackendOnline(true);
+        const updatedOrder = sanitizeShipment(res.data);
+        setShipments(prev => {
+          const next = prev.map(s => (s.awbNumber === awbNumber ? updatedOrder : s));
+          try {
+            localStorage.setItem('aerodispatch_shipments', JSON.stringify(next));
+          } catch (e) {}
+          return next;
+        });
+        assignedOnBackend = true;
       }
+    } catch (e) {
+      console.warn("Backend driver assignment failed:", e);
+      addToast(`Assignment notice: ${e.message}`, 'warning');
     }
 
-    // Local state assignment
-    setShipments(prev => prev.map(s => {
-      if (s.awbNumber === awbNumber) {
-        return {
-          ...s,
-          assignedDriver: {
-            driverId: driverInfo.driverId || driverInfo.id || `DRV-${Date.now().toString().slice(-4)}`,
-            name: driverInfo.name,
-            phone: driverInfo.phone || '',
-            vehicleNumber: driverInfo.vehicleNumber || driverInfo.vehicle || `KA-03-EV-${Date.now().toString().slice(-4)}`,
-            rating: driverInfo.rating || 5.0,
+    if (!assignedOnBackend) {
+      // Local state assignment fallback
+      setShipments(prev => {
+        const next = prev.map(s => {
+          if (s.awbNumber === awbNumber) {
+            return {
+              ...s,
+              assignedDriver: {
+                driverId: driverInfo.driverId || driverInfo.id || `DRV-${Date.now().toString().slice(-4)}`,
+                name: driverInfo.name,
+                phone: driverInfo.phone || '',
+                vehicleNumber: driverInfo.vehicleNumber || driverInfo.vehicle || `KA-03-EV-${Date.now().toString().slice(-4)}`,
+                rating: driverInfo.rating || 5.0,
+              }
+            };
           }
-        };
-      }
-      return s;
-    }));
+          return s;
+        });
+        try {
+          localStorage.setItem('aerodispatch_shipments', JSON.stringify(next));
+        } catch (e) {}
+        return next;
+      });
+    }
 
     // Driver notification
     const assignNotif = {
@@ -1393,7 +1580,7 @@ export function AppProvider({ children }) {
       targetRole: 'driver',
       category: 'assignment',
       title: `New Consignment Assigned: ${awbNumber}`,
-      message: `Operations assigned parcel ${awbNumber} to Courier ${driverInfo.name} (EV KA-03-EV-4412).`,
+      message: `Operations assigned parcel ${awbNumber} to Courier ${driverInfo.name}.`,
       time: 'Just now',
       awbNumber: awbNumber,
       read: false,
@@ -1406,9 +1593,12 @@ export function AppProvider({ children }) {
 
   // Driver accepts unassigned parcel request (Enforces: Exactly 1 Active Delivery at a time)
   const acceptDriverOrder = async (awbNumber) => {
+    const myPhone10 = (currentUser?.phone || currentUser?.phoneNumber || '').replace(/\D/g, '').slice(-10);
     // 1. Strict single-active delivery rule: Check if captain already has an ongoing consignment
     const activeOngoingDelivery = shipments.find(s => {
+      const drvPhone10 = (s.assignedDriver?.phone || '').replace(/\D/g, '').slice(-10);
       const isMyDelivery = (s.assignedDriver && (
+        (myPhone10.length >= 10 && drvPhone10 === myPhone10) ||
         s.assignedDriver.name?.toLowerCase() === currentUser?.name?.toLowerCase() ||
         (currentUser?.driverId && s.assignedDriver.driverId === currentUser.driverId)
       )) || (currentUser?.driverId && s.driverId === currentUser.driverId);
@@ -1422,11 +1612,12 @@ export function AppProvider({ children }) {
       return false;
     }
 
-    const isCaptainUser = currentUser?.email?.toLowerCase() === 'oldmemories021@gmail.com' || currentUser?.role === 'driver';
-    const driverId = currentUser?.driverId || (isCaptainUser ? 'DRV-0214' : `DRV-${Date.now().toString().slice(-4)}`);
-    const driverName = isCaptainUser ? 'Captain Rishabh' : (currentUser?.name || 'Assigned Courier');
-    const driverPhone = currentUser?.phone || (isCaptainUser ? '+91 98451 90214' : '');
-    const vehicleNumber = currentUser?.vehicleNumber || (isCaptainUser ? 'MH-02-EV-0214' : 'Express Cargo Van');
+    const rawName = (getCleanDisplayName(currentUser, 'driver') || 'Delivery Captain').trim();
+    const driverName = rawName.toLowerCase().startsWith('captain') ? rawName : `Captain ${rawName}`;
+    const phoneTail = (currentUser?.phone || currentUser?.phoneNumber || '').replace(/\D/g, '').slice(-4);
+    const driverId = currentUser?.driverId || `DRV-${phoneTail || Date.now().toString().slice(-4)}`;
+    const driverPhone = currentUser?.phone || currentUser?.phoneNumber || '';
+    const vehicleNumber = currentUser?.vehicleNumber || `MH-02-EV-${phoneTail || '0214'}`;
 
     const driverObj = {
       driverId,
@@ -1447,39 +1638,46 @@ export function AppProvider({ children }) {
       title: `Accepted by Delivery Captain (${driverName})`,
       location: 'Local Logistics Hub',
       timestamp: formattedTime,
-      notes: `Delivery Captain ${driverName} (${driverPhone}) accepted consignment dispatch request.`,
+      notes: `Delivery Captain ${driverName}${driverPhone ? ` (${driverPhone})` : ''} accepted consignment dispatch request.`,
     };
 
-    if (isBackendOnline) {
-      try {
-        const res = await apiDriverAcceptOrder(awbNumber, authToken);
-        if (res && res.data) {
-          const updated = {
-            ...res.data,
-            assignedDriver: driverObj,
-            currentStatus: 'OUT_FOR_DELIVERY',
-            events: [...(res.data.events || []), acceptEvent]
-          };
-          setShipments(prev => prev.map(s => (s.awbNumber === awbNumber ? updated : s)));
-          addToast(`Consignment ${awbNumber} accepted! Dispatched to your run sheet.`, 'success');
-          return updated;
-        }
-      } catch (e) {
-        console.warn("Backend accept order failed, performing local assignment:", e);
+    const tokenToUse = authToken || (typeof localStorage !== 'undefined' ? (localStorage.getItem('aerodispatch_token') || localStorage.getItem('aerodispatch_access_token')) : '');
+    try {
+      const res = await apiDriverAcceptOrder(awbNumber, tokenToUse);
+      if (res && res.data) {
+        setIsBackendOnline(true);
+        const updated = sanitizeShipment(res.data);
+        setShipments(prev => {
+          const next = prev.map(s => (s.awbNumber === awbNumber ? updated : s));
+          try {
+            localStorage.setItem('aerodispatch_shipments', JSON.stringify(next));
+          } catch (e) {}
+          return next;
+        });
+        addToast(`Consignment ${awbNumber} accepted! Dispatched to your run sheet.`, 'success');
+        return updated;
       }
+    } catch (e) {
+      console.warn("Backend accept order failed, performing local assignment:", e);
     }
 
-    setShipments(prev => prev.map(s => {
-      if (s.awbNumber === awbNumber) {
-        return {
-          ...s,
-          assignedDriver: driverObj,
-          currentStatus: 'OUT_FOR_DELIVERY',
-          events: [...(s.events || []), acceptEvent],
-        };
-      }
-      return s;
-    }));
+    setShipments(prev => {
+      const next = prev.map(s => {
+        if (s.awbNumber === awbNumber) {
+          return {
+            ...s,
+            assignedDriver: driverObj,
+            currentStatus: 'OUT_FOR_DELIVERY',
+            events: [...(s.events || []), acceptEvent],
+          };
+        }
+        return s;
+      });
+      try {
+        localStorage.setItem('aerodispatch_shipments', JSON.stringify(next));
+      } catch (e) {}
+      return next;
+    });
 
     addToast(`Consignment ${awbNumber} accepted! Dispatched to your run sheet.`, 'success');
   };
@@ -1489,61 +1687,82 @@ export function AppProvider({ children }) {
     const driverId = currentUser?.driverId || `DRV-${(currentUser?.phone || '').replace(/\D/g, '').slice(-4) || 'ACTIVE'}`;
     const driverName = getCleanDisplayName(currentUser, 'driver') || 'Delivery Captain';
 
-    if (isBackendOnline) {
-      try {
-        await apiDriverDeclineOrder(awbNumber, authToken);
-      } catch (e) {
-        console.warn("Backend decline note:", e);
-      }
+    const tokenToUse = authToken || (typeof localStorage !== 'undefined' ? (localStorage.getItem('aerodispatch_token') || localStorage.getItem('aerodispatch_access_token')) : '');
+    try {
+      await apiDriverDeclineOrder(awbNumber, tokenToUse);
+      setIsBackendOnline(true);
+    } catch (e) {
+      console.warn("Backend decline note:", e);
     }
 
-    setShipments(prev => prev.map(s => {
-      if (s.awbNumber === awbNumber) {
-        const declined = s.declinedByDrivers || [];
-        const declinedDetails = s.declinedDriverDetails || [];
-        const now = new Date();
-        const formattedTime = now.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ' ' +
-                              now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
-        return {
-          ...s,
-          declinedByDrivers: [...declined, driverId],
-          declinedDriverDetails: [
-            ...declinedDetails,
-            { driverId, driverName, timestamp: formattedTime }
-          ],
-          events: [
-            ...(s.events || []),
-            {
-              id: `ev-dec-${Date.now()}`,
-              status: s.currentStatus,
-              title: `Declined by Driver (${driverName})`,
-              location: 'Dispatch Pool',
-              timestamp: formattedTime,
-              notes: `Driver ${driverName} (${driverId}) declined order. Returned to available dispatch pool.`
-            }
-          ]
-        };
-      }
-      return s;
-    }));
+    setShipments(prev => {
+      const next = prev.map(s => {
+        if (s.awbNumber === awbNumber) {
+          const declined = s.declinedByDrivers || [];
+          const declinedDetails = s.declinedDriverDetails || [];
+          const now = new Date();
+          const formattedTime = now.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ' ' +
+                                now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+          return {
+            ...s,
+            declinedByDrivers: [...declined, driverId],
+            declinedDriverDetails: [
+              ...declinedDetails,
+              { driverId, driverName, timestamp: formattedTime }
+            ],
+            events: [
+              ...(s.events || []),
+              {
+                id: `ev-dec-${Date.now()}`,
+                status: s.currentStatus,
+                title: `Declined by Driver (${driverName})`,
+                location: 'Dispatch Pool',
+                timestamp: formattedTime,
+                notes: `Driver ${driverName} (${driverId}) declined order. Returned to available dispatch pool.`
+              }
+            ]
+          };
+        }
+        return s;
+      });
+      try {
+        localStorage.setItem('aerodispatch_shipments', JSON.stringify(next));
+      } catch (e) {}
+      return next;
+    });
 
     addToast(`Consignment ${awbNumber} declined and returned to dispatch pool.`, 'info');
   };
 
   // Upload proof of delivery photo
   const uploadProofPhoto = async (awbNumber, file, deliveredTo, otpCode = '', notes = '') => {
-    if (isBackendOnline) {
-      const res = await apiUploadProofPhoto(awbNumber, file, deliveredTo, otpCode, notes, authToken);
+    const tokenToUse = authToken || (typeof localStorage !== 'undefined' ? (localStorage.getItem('aerodispatch_token') || localStorage.getItem('aerodispatch_access_token')) : '');
+    try {
+      const res = await apiUploadProofPhoto(awbNumber, file, deliveredTo, otpCode, notes, tokenToUse);
       if (res && res.order) {
-        setShipments(prev => prev.map(s => (s.awbNumber === awbNumber ? res.order : s)));
+        setIsBackendOnline(true);
+        const updatedOrder = sanitizeShipment(res.order);
+        setShipments(prev => {
+          const next = prev.map(s => (s.awbNumber === awbNumber ? updatedOrder : s));
+          try {
+            localStorage.setItem('aerodispatch_shipments', JSON.stringify(next));
+          } catch (e) {}
+          return next;
+        });
         try {
           localStorage.setItem('aerodispatch_order_updated', JSON.stringify({ awbNumber, nextStatus: 'DELIVERED', timestamp: Date.now() }));
         } catch (e) {}
         addToast('Delivery proof photo uploaded and verified!', 'success');
         return res;
       }
+    } catch (e) {
+      const isNetworkErr = e?.name === 'TypeError' || String(e?.message || '').toLowerCase().includes('fetch');
+      if (!isNetworkErr) {
+        throw e;
+      }
+      console.warn("Network offline on POD upload, falling back locally:", e);
     }
-    // Fallback simulated URL
+    // Fallback simulated URL when unreachable
     updateShipmentStatus(awbNumber, 'DELIVERED', notes || `Delivered to ${deliveredTo}`, {
       deliveredTo,
       photoUrl: 'https://images.unsplash.com/photo-1549465220-1a8b9238cd48?w=500&q=80',
@@ -1738,6 +1957,7 @@ export function AppProvider({ children }) {
         updateDriverStatus,
         updateUserAvatar,
         updateUserProfile,
+        syncCloudUserData,
         notifications,
         unreadNotificationsCount,
         markNotificationRead,

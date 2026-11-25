@@ -27,7 +27,8 @@ export default function ProfileOverviewCard({
   const { 
     currentUser, 
     currentRole, 
-    shipments, 
+    shipments,
+    visibleShipments,
     updateUserProfile, 
     updateUserAvatar, 
     addToast,
@@ -116,7 +117,9 @@ export default function ProfileOverviewCard({
     }
 
     // Customer Persona
-    const myOrders = shipments.filter(s => (s.customerEmail || '').toLowerCase().trim() === (currentUser?.email || '').toLowerCase().trim());
+    const myOrders = Array.isArray(visibleShipments)
+      ? visibleShipments
+      : shipments.filter(s => (s.customerEmail || '').toLowerCase().trim() === (currentUser?.email || '').toLowerCase().trim());
     const orderCount = myOrders.length;
     const inTransit = myOrders.filter(s => s.status === 'in_transit' || s.status === 'dispatched' || s.currentStatus === 'IN_TRANSIT').length;
     return [

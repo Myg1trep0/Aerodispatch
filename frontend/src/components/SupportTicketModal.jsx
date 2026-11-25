@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { useApp } from '../context/AppContext';
 import { 
   HelpCircle, 
   Plus, 
@@ -27,6 +28,7 @@ const DEFAULT_SAMPLE_TICKETS = [
 ];
 
 export default function SupportTicketModal({ isOpen, onClose, shipments = [], currentUser }) {
+  const { syncCloudUserData } = useApp();
   const [tickets, setTickets] = useState(() => {
     try {
       const saved = localStorage.getItem('aerodispatch_support_tickets');
@@ -37,6 +39,21 @@ export default function SupportTicketModal({ isOpen, onClose, shipments = [], cu
     } catch (e) {}
     return DEFAULT_SAMPLE_TICKETS;
   });
+
+  useEffect(() => {
+    if (!isOpen) return;
+    try {
+      const saved = localStorage.getItem('aerodispatch_support_tickets');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setTickets(parsed);
+          return;
+        }
+      }
+    } catch (e) {}
+    setTickets(DEFAULT_SAMPLE_TICKETS);
+  }, [isOpen, currentUser?.email]);
 
   const [activeTab, setActiveTab] = useState('list'); // 'list' | 'new' | 'view'
   const [selectedTicket, setSelectedTicket] = useState(null);
@@ -58,6 +75,9 @@ export default function SupportTicketModal({ isOpen, onClose, shipments = [], cu
     try {
       localStorage.setItem('aerodispatch_support_tickets', JSON.stringify(next));
     } catch (e) {}
+    if (syncCloudUserData && currentUser) {
+      syncCloudUserData({ supportTickets: next });
+    }
   };
 
   const handleSubmit = (e) => {

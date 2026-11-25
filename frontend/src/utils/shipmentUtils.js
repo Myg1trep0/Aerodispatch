@@ -6,8 +6,8 @@
 export const REAL_CAPTAIN = {
   driverId: 'DRV-0214',
   id: 'DRV-0214',
-  name: 'Captain Rishabh',
-  email: 'oldmemories021@gmail.com',
+  name: 'Captain Dispatch',
+  email: 'captain.dispatch@aerodispatch.site',
   phone: '+91 98451 90214',
   vehicleNumber: 'MH-02-EV-0214',
   vehicle: 'MH-02-EV-0214',

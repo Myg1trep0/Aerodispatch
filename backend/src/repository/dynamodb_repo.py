@@ -187,11 +187,19 @@ class DynamoDBOrderRepository(OrderRepositoryInterface):
         customer_email: Optional[str] = None,
         limit: int = 50,
     ) -> List[Dict[str, Any]]:
-        """Scans orders with optional filter (for dev/admin views)."""
+        """Scans all order items (paginated across LastEvaluatedKey), filters, and sorts newest first."""
         try:
-            scan_kwargs: Dict[str, Any] = {"Limit": limit}
-            response = self.table.scan(**scan_kwargs)
-            items = [_decimals_to_primitives(item) for item in response.get("Items", [])]
+            raw_items: List[Dict[str, Any]] = []
+            scan_kwargs: Dict[str, Any] = {}
+            while True:
+                response = self.table.scan(**scan_kwargs)
+                raw_items.extend(response.get("Items", []))
+                last_key = response.get("LastEvaluatedKey")
+                if not last_key:
+                    break
+                scan_kwargs["ExclusiveStartKey"] = last_key
+
+            items = [_decimals_to_primitives(item) for item in raw_items]
             items = [i for i in items if not str(i.get("orderId", "")).startswith("USER#")]
             if status:
                 items = [i for i in items if i.get("currentStatus") == status]
@@ -208,7 +216,8 @@ class DynamoDBOrderRepository(OrderRepositoryInterface):
                     or (isinstance(i.get("sender"), dict) and i["sender"].get("email") and str(i["sender"]["email"]).strip().lower() == c_norm)
                     or (isinstance(i.get("recipient"), dict) and i["recipient"].get("email") and str(i["recipient"]["email"]).strip().lower() == c_norm)
                 ]
-            return items
+            items.sort(key=lambda x: str(x.get("createdAt", "")), reverse=True)
+            return items[:limit]
         except Exception as e:
             logger.warning(f"Error scanning DynamoDB table: {e}")
             return []

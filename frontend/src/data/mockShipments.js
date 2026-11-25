@@ -56,8 +56,8 @@ export const MASTER_ADMIN_DRIVERS = [
   {
     id: 'DRV-0214',
     driverId: 'DRV-0214',
-    name: 'Captain Rishabh',
-    email: 'oldmemories021@gmail.com',
+    name: 'Captain Dispatch',
+    email: 'captain.dispatch@aerodispatch.site',
     phone: '+91 98451 90214',
     vehicle: 'MH-02-EV-0214',
     vehicleType: 'Express Electric Cargo Van',

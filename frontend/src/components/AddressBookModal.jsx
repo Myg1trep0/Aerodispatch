@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useApp } from '../context/AppContext';
 import { 
   BookOpen, 
   Plus, 
@@ -39,6 +40,7 @@ const DEFAULT_ADDRESS_PRESETS = [
 ];
 
 export default function AddressBookModal({ isOpen, onClose, onSelectAddress, mode = 'manage' }) {
+  const { currentUser, syncCloudUserData } = useApp();
   const [addresses, setAddresses] = useState(() => {
     try {
       const saved = localStorage.getItem('aerodispatch_address_book');
@@ -49,6 +51,21 @@ export default function AddressBookModal({ isOpen, onClose, onSelectAddress, mod
     } catch (e) {}
     return DEFAULT_ADDRESS_PRESETS;
   });
+
+  useEffect(() => {
+    if (!isOpen) return;
+    try {
+      const saved = localStorage.getItem('aerodispatch_address_book');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setAddresses(parsed);
+          return;
+        }
+      }
+    } catch (e) {}
+    setAddresses(DEFAULT_ADDRESS_PRESETS);
+  }, [isOpen, currentUser?.email]);
 
   const [isEditing, setIsEditing] = useState(false);
   const [editingId, setEditingId] = useState(null);
@@ -66,12 +83,15 @@ export default function AddressBookModal({ isOpen, onClose, onSelectAddress, mod
 
   if (!isOpen) return null;
 
-  // Save changes to localStorage whenever addresses update
+  // Save changes to localStorage & AWS cloud profile whenever addresses update
   const saveAddresses = (newAddresses) => {
     setAddresses(newAddresses);
     try {
       localStorage.setItem('aerodispatch_address_book', JSON.stringify(newAddresses));
     } catch (e) {}
+    if (syncCloudUserData && currentUser) {
+      syncCloudUserData({ addressBook: newAddresses });
+    }
   };
 
   const handleOpenAdd = () => {

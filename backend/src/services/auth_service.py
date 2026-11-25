@@ -177,27 +177,33 @@ class LocalAuthService(AuthServiceInterface):
             except Exception as de:
                 logger.warning(f"Could not initialize DynamoDB table for users: {de}")
 
+        # Cloud profile cache (for local/mock mode alongside DynamoDB persistence)
+        self._cloud_profiles: Dict[str, Dict[str, Any]] = {}
+
     def _save_user_to_dynamo(self, user: Dict[str, Any]) -> None:
         if not self._dynamo_table:
             return
         try:
+            existing = self._get_user_from_dynamo(user["email"]) or {}
+            resolved_role = user.get("role") or existing.get("role", "customer")
             item = {
+                **existing,
                 "orderId": f"USER#{user['email']}",
                 "email": user["email"],
-                "name": user.get("name", ""),
-                "role": user.get("role", "customer"),
-                "passwordHash": user.get("passwordHash", ""),
-                "phoneNumber": user.get("phoneNumber") or user.get("phone", ""),
-                "driverId": user.get("driverId") or "",
-                "vehicleNumber": user.get("vehicleNumber") or "",
-                "status": user.get("status", "CONFIRMED")
+                "name": user.get("name") or existing.get("name", ""),
+                "role": resolved_role,
+                "passwordHash": user.get("passwordHash") or existing.get("passwordHash", ""),
+                "phoneNumber": user.get("phoneNumber") or user.get("phone") or existing.get("phoneNumber", ""),
+                "driverId": (user.get("driverId") or existing.get("driverId", "")) if resolved_role == "driver" else "",
+                "vehicleNumber": (user.get("vehicleNumber") or existing.get("vehicleNumber", "")) if resolved_role == "driver" else "",
+                "status": user.get("status") or existing.get("status", "CONFIRMED"),
             }
             self._dynamo_table.put_item(Item=item)
         except Exception as e:
             logger.warning(f"Could not save user to DynamoDB: {e}")
 
     def _get_user_from_dynamo(self, email: str) -> Optional[Dict[str, Any]]:
-        if not self._dynamo_table:
+        if not self._dynamo_table or not email:
             return None
         try:
             res = self._dynamo_table.get_item(Key={"orderId": f"USER#{email.strip().lower()}"})
@@ -205,6 +211,54 @@ class LocalAuthService(AuthServiceInterface):
         except Exception as e:
             logger.warning(f"Could not get user from DynamoDB: {e}")
             return None
+
+    def get_user_cloud_profile(self, email: str) -> Dict[str, Any]:
+        """Retrieves persisted user profile, avatar, address book, and support tickets across devices."""
+        clean_email = (email or "").strip().lower()
+        if not clean_email:
+            return {}
+        ddb_item = self._get_user_from_dynamo(clean_email)
+        mem_item = self._cloud_profiles.get(clean_email, {})
+        source = ddb_item if ddb_item else mem_item
+        result: Dict[str, Any] = {}
+        for field in ("name", "phone", "company", "timezone", "avatarUrl", "addressBook", "supportTickets"):
+            val = source.get(field)
+            if val is None and field == "phone":
+                val = source.get("phoneNumber")
+            if val is not None and val != "":
+                result[field] = val
+        return result
+
+    def update_user_cloud_profile(self, email: str, updates: Dict[str, Any]) -> Dict[str, Any]:
+        """Persists user profile fields, avatar, address book, and tickets to DynamoDB/cache."""
+        clean_email = (email or "").strip().lower()
+        if not clean_email:
+            return {}
+        allowed = {}
+        for field in ("name", "phone", "company", "timezone", "avatarUrl", "addressBook", "supportTickets"):
+            if field in updates and updates[field] is not None:
+                allowed[field] = updates[field]
+        if "phone" in allowed:
+            allowed["phoneNumber"] = allowed["phone"]
+
+        current = self._cloud_profiles.get(clean_email, {})
+        current.update(allowed)
+        self._cloud_profiles[clean_email] = current
+
+        if clean_email in self._users:
+            if allowed.get("name"):
+                self._users[clean_email]["name"] = allowed["name"]
+            if allowed.get("phone"):
+                self._users[clean_email]["phoneNumber"] = allowed["phone"]
+
+        if self._dynamo_table:
+            try:
+                existing = self._get_user_from_dynamo(clean_email) or {"orderId": f"USER#{clean_email}", "email": clean_email}
+                existing.update(allowed)
+                self._dynamo_table.put_item(Item=existing)
+            except Exception as e:
+                logger.warning(f"Could not update cloud profile in DynamoDB: {e}")
+        return self.get_user_cloud_profile(clean_email)
 
     def register_user(
         self,
@@ -233,6 +287,7 @@ class LocalAuthService(AuthServiceInterface):
                 signup_attrs = [
                     {"Name": "email", "Value": normalized_email},
                     {"Name": "name", "Value": name.strip()},
+                    {"Name": "profile", "Value": role},
                 ]
                 if phone_number:
                     clean_phone = phone_number.strip().replace(" ", "")
@@ -471,26 +526,37 @@ class LocalAuthService(AuthServiceInterface):
                     )
                     groups = [g["GroupName"] for g in g_res.get("Groups", [])]
                     
-                    # Fetch persistent profile from DynamoDB to guarantee Driver attributes
+                    # Fetch persistent profile from DynamoDB to normalize user role and Driver attributes
                     ddb_user = self._get_user_from_dynamo(normalized_email)
-                    user_role = groups[0] if groups else "customer"
-                    driver_id = None
-                    vehicle_number = None
-                    phone_number = attrs.get("phone_number", "")
-
-                    if ddb_user:
-                        user_role = ddb_user.get("role", user_role)
-                        driver_id = ddb_user.get("driverId")
-                        vehicle_number = ddb_user.get("vehicleNumber")
-                        phone_number = ddb_user.get("phoneNumber", phone_number)
-
-                    if requested_role == "driver" or user_role == "driver" or ("driver" in normalized_email) or ("driver" in groups):
+                    cognito_profile = (attrs.get("profile") or "").strip().lower()
+                    if "admin" in groups:
+                        user_role = "admin"
+                    elif "driver" in groups:
                         user_role = "driver"
-                        driver_id = driver_id or f"DRV-{secrets.randbelow(900) + 100}"
-                        vehicle_number = vehicle_number or f"KA-03-EV-{secrets.randbelow(9000) + 1000}"
-                        phone_number = phone_number or ""
+                    elif "customer" in groups:
+                        user_role = "customer"
+                    elif cognito_profile in ("admin", "driver", "customer"):
+                        user_role = cognito_profile
+                    elif ddb_user and ddb_user.get("role") in ("admin", "driver", "customer"):
+                        user_role = ddb_user["role"]
+                    else:
+                        user_role = "customer"
 
-                    user_name = attrs.get("name", normalized_email.split("@")[0])
+                    driver_id = ddb_user.get("driverId") if (ddb_user and user_role == "driver") else None
+                    vehicle_number = ddb_user.get("vehicleNumber") if (ddb_user and user_role == "driver") else None
+                    phone_number = attrs.get("phone_number") or (ddb_user.get("phoneNumber") if ddb_user else "") or ""
+
+                    if not (groups or cognito_profile in ("admin", "driver", "customer")):
+                        if requested_role == "driver" or ("driver" in normalized_email):
+                            user_role = "driver"
+
+                    if user_role == "driver":
+                        digits = "".join(ch for ch in str(phone_number) if ch.isdigit())
+                        derived_driver_id = f"DRV-{digits[-4:]}" if len(digits) >= 4 else f"DRV-{secrets.randbelow(900) + 100}"
+                        driver_id = driver_id or derived_driver_id
+                        vehicle_number = vehicle_number or f"KA-03-EV-{secrets.randbelow(9000) + 1000}"
+
+                    user_name = (ddb_user.get("name") if ddb_user and ddb_user.get("name") else None) or attrs.get("name", normalized_email.split("@")[0])
                     user_sub = attrs.get("sub", f"usr-{user_role[:3]}-{secrets.token_hex(4)}")
                     
                     user_record = {
@@ -690,26 +756,47 @@ class LocalAuthService(AuthServiceInterface):
                     if claims:
                         # Normalize user profile and roles from Cognito
                         email = (claims.get("email") or claims.get("cognito:username") or claims.get("username") or "").strip().lower()
-                        groups = claims.get("cognito:groups", [])
-                        role = "customer"
-                        if "admin" in groups or email in ("anil@aerodispatch.io", "microsofty543@gmail.com"):
-                            role = "admin"
-                        elif "driver" in groups or claims.get("profile") == "driver" or email == "oldmemories021@gmail.com":
-                            role = "driver"
-                        elif "customer" in groups or claims.get("profile") == "customer":
-                            role = "customer"
+                        groups = [g.lower() for g in (claims.get("cognito:groups") or []) if isinstance(g, str)]
+                        cognito_profile = (claims.get("profile") or "").strip().lower()
 
-                        name = claims.get("name") or claims.get("given_name") or (email.split("@")[0].capitalize() if email else "Operator")
-                        phone = claims.get("phone_number") or ""
-                        
+                        cached_user = self._users.get(email) if email else None
+                        if not cached_user and email and self._dynamo_table:
+                            cached_user = self._get_user_from_dynamo(email)
+                            if cached_user:
+                                self._users[email] = cached_user
+
+                        role = "customer"
+                        if "admin" in groups or cognito_profile == "admin" or email == "anil@aerodispatch.io":
+                            role = "admin"
+                        elif "driver" in groups or cognito_profile == "driver":
+                            role = "driver"
+                        elif "customer" in groups or cognito_profile == "customer":
+                            role = "customer"
+                        elif cached_user and cached_user.get("role") in ("admin", "driver", "customer"):
+                            role = cached_user["role"]
+
+                        name = (
+                            (cached_user.get("name") if cached_user and cached_user.get("name") else None)
+                            or claims.get("name")
+                            or claims.get("given_name")
+                            or (email.split("@")[0].capitalize() if email else "Operator")
+                        )
+                        phone = (
+                            (cached_user.get("phoneNumber") if cached_user and cached_user.get("phoneNumber") else None)
+                            or claims.get("phone_number")
+                            or ""
+                        )
+
                         claims["role"] = role
                         claims["email"] = email
                         claims["name"] = name
                         claims["sub"] = claims.get("sub", email)
                         claims["phone"] = phone
                         if role == "driver":
-                            claims["driverId"] = "DRV-0214" if email == "oldmemories021@gmail.com" else f"DRV-{(phone or claims['sub'])[-4:]}"
-                        
+                            digits = "".join(ch for ch in str(phone) if ch.isdigit())
+                            stored_drv = cached_user.get("driverId") if cached_user else None
+                            claims["driverId"] = stored_drv or (f"DRV-{digits[-4:]}" if len(digits) >= 4 else f"DRV-{str(claims['sub'])[-4:]}")
+
                         return claims
             except Exception as ce:
                 logger.warning(f"Cognito token parsing note: {ce}")

@@ -211,6 +211,16 @@ class RateOrderRequest(StrictBaseModel):
     feedback: Optional[str] = Field("", max_length=1000)
 
 
+class UserSyncRequest(StrictBaseModel):
+    name: Optional[str] = Field(None, max_length=128)
+    phone: Optional[str] = Field(None, max_length=32)
+    company: Optional[str] = Field(None, max_length=128)
+    timezone: Optional[str] = Field(None, max_length=64)
+    avatarUrl: Optional[str] = Field(None, max_length=2000000)
+    addressBook: Optional[List[Dict[str, Any]]] = None
+    supportTickets: Optional[List[Dict[str, Any]]] = None
+
+
 # ==============================================================================
 # Cookie Helpers
 # ==============================================================================
@@ -627,6 +637,67 @@ def get_me(user: Dict[str, Any] = Depends(get_current_user)):
     return {"user": user}
 
 
+def _phone_last10(raw_phone: Optional[str]) -> str:
+    """Extracts last 10 digits for canonical phone matching when >= 10 digits exist."""
+    digits = "".join(ch for ch in str(raw_phone or "") if ch.isdigit())
+    return digits[-10:] if len(digits) >= 10 else ""
+
+
+def _is_customer_order_owner(order: Dict[str, Any], user_email: str, user_phone_10: str) -> bool:
+    """Checks whether an order belongs to the authenticated customer via email or verified 10-digit phone."""
+    c_email = (order.get("customerEmail") or "").strip().lower()
+    s_email = (order.get("sender", {}).get("email") or "").strip().lower() if isinstance(order.get("sender"), dict) else ""
+    r_email = (order.get("recipient", {}).get("email") or "").strip().lower() if isinstance(order.get("recipient"), dict) else ""
+    if user_email and user_email in (c_email, s_email, r_email):
+        return True
+    if user_phone_10:
+        s_phone = _phone_last10(order.get("sender", {}).get("phone") if isinstance(order.get("sender"), dict) else "")
+        r_phone = _phone_last10(order.get("recipient", {}).get("phone") if isinstance(order.get("recipient"), dict) else "")
+        if user_phone_10 in (s_phone, r_phone):
+            return True
+    return False
+
+
+def _is_driver_assigned_to_order(order: Dict[str, Any], user: Dict[str, Any]) -> bool:
+    """Checks whether an order's assignedDriver matches the authenticated driver by ID or verified 10-digit phone."""
+    assigned_drv = order.get("assignedDriver")
+    if not assigned_drv or not assigned_drv.get("driverId"):
+        return True
+    user_drv_id = str(user.get("driverId") or "").strip()
+    if user_drv_id and str(assigned_drv.get("driverId")).strip() == user_drv_id:
+        return True
+    user_phone_10 = _phone_last10(user.get("phoneNumber") or user.get("phone") or user.get("phone_number"))
+    drv_phone_10 = _phone_last10(assigned_drv.get("phone"))
+    return bool(user_phone_10 and drv_phone_10 and user_phone_10 == drv_phone_10)
+
+
+@app.get("/api/v1/user/sync")
+def get_user_sync(user: Dict[str, Any] = Depends(get_current_user)):
+    """Retrieves persisted user profile, avatar, address book, and support tickets across devices."""
+    email = (user.get("email") or "").strip().lower()
+    profile = auth_service.get_user_cloud_profile(email) if email else {}
+    return {"user": user, "profile": profile}
+
+
+@app.put("/api/v1/user/sync")
+def update_user_sync(
+    req: UserSyncRequest,
+    request: Request,
+    user: Dict[str, Any] = Depends(get_current_user),
+):
+    """Persists user profile edits, avatar, address book, and support tickets to DynamoDB."""
+    verify_csrf_token(request)
+    email = (user.get("email") or "").strip().lower()
+    if not email:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Authenticated user email is required for cloud sync.",
+        )
+    updates = req.model_dump(exclude_none=True) if hasattr(req, "model_dump") else req.dict(exclude_none=True)
+    updated_profile = auth_service.update_user_cloud_profile(email, updates)
+    return {"message": "Cloud profile synced successfully.", "profile": updated_profile}
+
+
 # In-memory OTP storage for phone verification: {clean_phone: {"code": str, "expires": float}}
 _otp_store: Dict[str, Dict[str, Any]] = {}
 
@@ -725,9 +796,11 @@ async def create_order(
     # If caller authenticated as customer or admin, associate order with their account
     user = get_optional_current_user(request=request, authorization=authorization)
     if user and user.get("email"):
-        normalized_data.setdefault("customerEmail", user["email"].lower())
+        auth_email = user["email"].lower()
+        if not normalized_data.get("customerEmail"):
+            normalized_data["customerEmail"] = auth_email
         if not normalized_data.get("sender", {}).get("email"):
-            normalized_data.setdefault("sender", {})["email"] = user["email"].lower()
+            normalized_data.setdefault("sender", {})["email"] = auth_email
 
     # Amazon Location Service: Geocode destination and calculate road distance/ETA
     try:
@@ -816,12 +889,14 @@ def get_order_tracking(
     user = get_optional_current_user(request=request, authorization=authorization)
     if user:
         role = user.get("role")
-        user_email = (user.get("email") or "").lower()
-        order_customer_email = (order.get("customerEmail") or order.get("sender", {}).get("email") or "").lower()
+        user_email = (user.get("email") or "").strip().lower()
+        user_phone_10 = _phone_last10(user.get("phoneNumber") or user.get("phone") or user.get("phone_number"))
+        order_customer_email = (order.get("customerEmail") or order.get("sender", {}).get("email") or "").strip().lower()
 
         # IDOR check for customers: cannot inspect other customers' shipments
         if role == "customer":
-            if order_customer_email and order_customer_email != user_email:
+            has_identity_on_order = bool(order_customer_email or (isinstance(order.get("recipient"), dict) and order["recipient"].get("email")))
+            if has_identity_on_order and not _is_customer_order_owner(order, user_email, user_phone_10):
                 log_security_event(
                     event_type="IDOR_ATTEMPT",
                     action="get_order_tracking",
@@ -840,7 +915,7 @@ def get_order_tracking(
         # IDOR check for drivers: cannot view details of consignments assigned to another driver
         elif role == "driver":
             assigned_drv = order.get("assignedDriver")
-            if assigned_drv and assigned_drv.get("driverId") and assigned_drv.get("driverId") != user.get("driverId"):
+            if not _is_driver_assigned_to_order(order, user):
                 log_security_event(
                     event_type="IDOR_ATTEMPT",
                     action="get_order_tracking",
@@ -849,7 +924,7 @@ def get_order_tracking(
                     actor_email=user_email,
                     actor_role=role,
                     resource=order_id,
-                    details={"assignedDriverId": assigned_drv.get("driverId")},
+                    details={"assignedDriverId": assigned_drv.get("driverId") if assigned_drv else None},
                 )
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
@@ -875,8 +950,23 @@ def get_customer_orders(
     user: Dict[str, Any] = Depends(require_roles(["customer", "admin"]))
 ):
     """Retrieves all consignments strictly associated with the authenticated customer."""
-    target_email = (user.get("email") or email or "").strip().lower()
-    orders = order_service.list_orders(customer_email=target_email)
+    if user.get("role") == "admin" and email:
+        target_email = email.strip().lower()
+        user_phone_10 = ""
+    else:
+        target_email = (user.get("email") or email or "").strip().lower()
+        user_phone_10 = _phone_last10(user.get("phoneNumber") or user.get("phone") or user.get("phone_number"))
+
+    orders = order_service.list_orders(customer_email=target_email, limit=200) if target_email else []
+    if user_phone_10:
+        all_orders = order_service.list_orders(limit=200)
+        seen = {o.get("orderId") or o.get("awbNumber") for o in orders if o.get("orderId") or o.get("awbNumber")}
+        for o in all_orders:
+            oid = o.get("orderId") or o.get("awbNumber")
+            if oid and oid not in seen and _is_customer_order_owner(o, target_email, user_phone_10):
+                seen.add(oid)
+                orders.append(o)
+        orders.sort(key=lambda x: str(x.get("createdAt", "")), reverse=True)
     return {"data": orders, "count": len(orders)}
 
 
@@ -932,12 +1022,19 @@ def rate_consignment(
 def get_driver_orders(user: Dict[str, Any] = Depends(require_roles(["driver", "admin"]))):
     """Retrieves consignments assigned to this driver along with unassigned customer bookings available for pickup."""
     driver_id = user.get("driverId")
-    assigned_orders = order_service.list_orders(driver_id=driver_id)
-    
+    user_phone_10 = _phone_last10(user.get("phoneNumber") or user.get("phone") or user.get("phone_number"))
+    assigned_orders = order_service.list_orders(driver_id=driver_id, limit=200)
+    if user_phone_10:
+        all_orders = order_service.list_orders(limit=200)
+        for o in all_orders:
+            assigned_drv = o.get("assignedDriver")
+            if assigned_drv and _phone_last10(assigned_drv.get("phone")) == user_phone_10:
+                assigned_orders.append(o)
+
     # Also include newly booked customer consignments waiting for driver pickup
-    booked_orders = order_service.list_orders(status="BOOKED")
+    booked_orders = order_service.list_orders(status="BOOKED", limit=200)
     unassigned = [
-        o for o in booked_orders 
+        o for o in booked_orders
         if not o.get("assignedDriver") and driver_id not in o.get("declinedByDrivers", [])
     ]
 
@@ -949,7 +1046,7 @@ def get_driver_orders(user: Dict[str, Any] = Depends(require_roles(["driver", "a
             seen.add(oid)
             combined.append(o)
 
-    # No fallback — drivers only see their own assigned + unassigned bookings
+    combined.sort(key=lambda x: str(x.get("createdAt", "")), reverse=True)
     return {"data": combined, "count": len(combined)}
 
 
@@ -1038,21 +1135,20 @@ def update_driver_status(
     # Enforce driver assignment check (BOLA / IDOR)
     if user.get("role") == "driver":
         assigned_drv = order.get("assignedDriver")
-        if assigned_drv and assigned_drv.get("driverId"):
-            if assigned_drv.get("driverId") != user.get("driverId"):
-                log_security_event(
-                    event_type="IDOR_ATTEMPT",
-                    action="update_driver_status",
-                    status="BLOCKED",
-                    actor_id=user.get("sub") or user.get("id"),
-                    actor_role="driver",
-                    resource=order_id,
-                    details={"assignedDriver": assigned_drv.get("driverId"), "requestingDriver": user.get("driverId")},
-                )
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail=f"Forbidden: Consignment is assigned to associate {assigned_drv.get('driverId')}.",
-                )
+        if not _is_driver_assigned_to_order(order, user):
+            log_security_event(
+                event_type="IDOR_ATTEMPT",
+                action="update_driver_status",
+                status="BLOCKED",
+                actor_id=user.get("sub") or user.get("id"),
+                actor_role="driver",
+                resource=order_id,
+                details={"assignedDriver": assigned_drv.get("driverId") if assigned_drv else None, "requestingDriver": user.get("driverId")},
+            )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Forbidden: Consignment is assigned to associate {assigned_drv.get('driverId')}.",
+            )
 
     try:
         updated = order_service.update_status(

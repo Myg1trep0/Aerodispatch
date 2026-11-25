@@ -88,10 +88,10 @@ export function getPersistentAvatar(email, role) {
     // 2. Persistent avatar vault
     const vault = JSON.parse(localStorage.getItem('aerodispatch_persistent_avatars') || '{}');
     if (cleanEmail && vault[cleanEmail]) return vault[cleanEmail];
-    if (cleanRole && vault[cleanRole]) return vault[cleanRole];
+    if (!cleanEmail && cleanRole && vault[cleanRole]) return vault[cleanRole];
 
-    // 3. Direct role standalone key
-    if (cleanRole) {
+    // 3. Direct role standalone key (only when no specific account email is provided)
+    if (!cleanEmail && cleanRole) {
       const roleDirect = localStorage.getItem(`aerodispatch_avatar_${cleanRole}`);
       if (roleDirect) return roleDirect;
     }
@@ -108,15 +108,18 @@ export function getPersistentAvatar(email, role) {
       if (found?.avatarUrl) return found.avatarUrl;
     }
 
-    // 5. Driver list if driver
+    // 6. Driver list if driver
     if (cleanRole === 'driver' || cleanEmail.includes('driver')) {
       const drivers = JSON.parse(localStorage.getItem('aerodispatch_fleet_drivers') || '[]');
-      const foundDrv = drivers.find(d => d.email?.toLowerCase() === cleanEmail || d.id === 'DRV-0214');
+      const foundDrv = drivers.find(d => (cleanEmail ? d.email?.toLowerCase() === cleanEmail : d.id === 'DRV-0214'));
       if (foundDrv?.avatarUrl) return foundDrv.avatarUrl;
     }
 
-    // 6. Global fallback
-    return vault['last_uploaded_avatar'] || localStorage.getItem('aerodispatch_avatar_latest') || null;
+    // 7. Global fallback only when un-scoped
+    if (!cleanEmail) {
+      return vault['last_uploaded_avatar'] || localStorage.getItem('aerodispatch_avatar_latest') || null;
+    }
+    return null;
   } catch (e) {
     if (role === 'admin' || email === 'admin@aerodispatch.io') return ADMIN_DEFAULT_AVATAR;
     return null;

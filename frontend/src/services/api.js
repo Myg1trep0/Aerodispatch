@@ -109,30 +109,37 @@ export async function apiLogin(email, password, role = null) {
 
       const cleanEmail = email.toLowerCase().trim();
       const resolvedName = claims.name || claims.given_name || extractDisplayName(cleanEmail, cogRes.idToken);
-      const isCaptainEmail = cleanEmail === 'oldmemories021@gmail.com' || cleanEmail.includes('driver');
-      const groups = claims['cognito:groups'] || [];
-      
-      let resolvedRole = role;
-      if (!resolvedRole) {
-        if (isCaptainEmail || groups.includes('driver') || claims.profile === 'driver') {
-          resolvedRole = 'driver';
-        } else if (groups.includes('admin') || cleanEmail === 'microsofty543@gmail.com' || cleanEmail.includes('admin')) {
-          resolvedRole = 'admin';
-        } else {
-          resolvedRole = claims.profile || 'customer';
-        }
+      const groups = (claims['cognito:groups'] || []).map(g => String(g).toLowerCase());
+      const cogProfile = String(claims.profile || '').trim().toLowerCase();
+
+      let resolvedRole = '';
+      if (groups.includes('admin') || cogProfile === 'admin' || cleanEmail === 'anil@aerodispatch.io') {
+        resolvedRole = 'admin';
+      } else if (groups.includes('driver') || cogProfile === 'driver') {
+        resolvedRole = 'driver';
+      } else if (groups.includes('customer') || cogProfile === 'customer') {
+        resolvedRole = 'customer';
+      } else if (role) {
+        resolvedRole = role;
+      } else if (cleanEmail.includes('driver')) {
+        resolvedRole = 'driver';
+      } else {
+        resolvedRole = 'customer';
       }
 
+      const rawPhone = claims.phone_number || '';
       const userObj = {
         email: cleanEmail,
         name: resolvedName,
         role: resolvedRole,
-        phone: claims.phone_number || (isCaptainEmail ? '+91 98451 90214' : (cleanEmail === 'microsofty543@gmail.com' ? '+91 84338 26567' : ''))
+        phone: rawPhone
       };
 
       if (resolvedRole === 'driver') {
-        userObj.driverId = 'DRV-0214';
-        userObj.vehicleNumber = 'MH-02-EV-0214';
+        const phoneDigits = String(rawPhone).replace(/\D/g, '');
+        const suffix = phoneDigits.length >= 4 ? phoneDigits.slice(-4) : String(claims.sub || '0214').slice(-4);
+        userObj.driverId = claims['custom:driverId'] || `DRV-${suffix}`;
+        userObj.vehicleNumber = `MH-02-EV-${suffix}`;
         userObj.operationalZone = 'Mumbai Metro & Central Corridor';
         userObj.zone = 'Mumbai Metro & Central Corridor';
         userObj.hub = 'Central Logistics Hub';
@@ -290,13 +297,18 @@ export async function apiListOrders({ status = null, token = null, role = null, 
   return res.json();
 }
 
+function _resolveAuthToken(token) {
+  return token || (typeof localStorage !== 'undefined' ? (localStorage.getItem('aerodispatch_token') || localStorage.getItem('aerodispatch_access_token')) : null);
+}
+
 export async function apiUpdateStatus(awbNumber, targetStatus, notes = '', proofData = null, token = null, isAdmin = false) {
   const endpoint = isAdmin
     ? `${API_BASE_URL}/api/v1/admin/orders/${encodeURIComponent(awbNumber)}/override`
     : `${API_BASE_URL}/api/v1/driver/orders/${encodeURIComponent(awbNumber)}/status`;
 
+  const authToken = _resolveAuthToken(token);
   const headers = { 'Content-Type': 'application/json' };
-  if (token) headers['Authorization'] = `Bearer ${token}`;
+  if (authToken) headers['Authorization'] = `Bearer ${authToken}`;
 
   const res = await fetch(endpoint, {
     method: 'PATCH',
@@ -313,8 +325,9 @@ export async function apiUpdateStatus(awbNumber, targetStatus, notes = '', proof
 }
 
 export async function apiAssignDriver(awbNumber, driverInfo, token = null) {
+  const authToken = _resolveAuthToken(token);
   const headers = { 'Content-Type': 'application/json' };
-  if (token) headers['Authorization'] = `Bearer ${token}`;
+  if (authToken) headers['Authorization'] = `Bearer ${authToken}`;
 
   const res = await fetch(`${API_BASE_URL}/api/v1/admin/orders/${encodeURIComponent(awbNumber)}/assign`, {
     method: 'POST',
@@ -336,8 +349,9 @@ export async function apiAssignDriver(awbNumber, driverInfo, token = null) {
 }
 
 export async function apiDriverAcceptOrder(awbNumber, token = null) {
+  const authToken = _resolveAuthToken(token);
   const headers = { 'Content-Type': 'application/json' };
-  if (token) headers['Authorization'] = `Bearer ${token}`;
+  if (authToken) headers['Authorization'] = `Bearer ${authToken}`;
 
   const res = await fetch(`${API_BASE_URL}/api/v1/driver/orders/${encodeURIComponent(awbNumber)}/accept`, {
     method: 'POST',
@@ -353,8 +367,9 @@ export async function apiDriverAcceptOrder(awbNumber, token = null) {
 }
 
 export async function apiDriverDeclineOrder(awbNumber, token = null) {
+  const authToken = _resolveAuthToken(token);
   const headers = { 'Content-Type': 'application/json' };
-  if (token) headers['Authorization'] = `Bearer ${token}`;
+  if (authToken) headers['Authorization'] = `Bearer ${authToken}`;
 
   const res = await fetch(`${API_BASE_URL}/api/v1/driver/orders/${encodeURIComponent(awbNumber)}/decline`, {
     method: 'POST',
@@ -467,4 +482,36 @@ export function resolvePhotoUrl(url) {
     return `${API_BASE_URL}${url}`;
   }
   return `${API_BASE_URL}/${url}`;
+}
+
+export async function apiGetUserSync(token = null) {
+  const authToken = _resolveAuthToken(token);
+  if (!authToken) return null;
+  const res = await fetch(`${API_BASE_URL}/api/v1/user/sync`, {
+    method: 'GET',
+    headers: { 'Authorization': `Bearer ${authToken}` },
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Failed to load user cloud sync');
+  }
+  return res.json();
+}
+
+export async function apiSaveUserSync(payload, token = null) {
+  const authToken = _resolveAuthToken(token);
+  if (!authToken) return null;
+  const res = await fetch(`${API_BASE_URL}/api/v1/user/sync`, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${authToken}`,
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || 'Failed to save user cloud sync');
+  }
+  return res.json();
 }

@@ -83,26 +83,6 @@ export default function DriverManagementPage() {
         !veh.includes('3051')
       );
     });
-    if (!list.some(d => String(d.email || '').toLowerCase() === 'oldmemories021@gmail.com' || d.id === 'DRV-0214')) {
-      list = [
-        {
-          id: 'DRV-0214',
-          driverId: 'DRV-0214',
-          name: 'Captain Rishabh',
-          email: 'oldmemories021@gmail.com',
-          phone: '+91 98451 90214',
-          vehicle: 'MH-02-EV-0214',
-          vehicleType: 'Express Electric Cargo Van',
-          operationalZone: 'Mumbai Metro & Central Corridor',
-          zone: 'Mumbai Metro & Central Corridor',
-          hub: 'Central Logistics Hub',
-          status: 'AVAILABLE',
-          rating: 5.0,
-          avatarUrl: getPersistentAvatar('oldmemories021@gmail.com', 'driver')
-        },
-        ...list
-      ];
-    }
     return list;
   }, [driversList, drivers]);
 

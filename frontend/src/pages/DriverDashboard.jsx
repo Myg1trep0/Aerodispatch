@@ -136,8 +136,9 @@ export default function DriverDashboard() {
   // Filter shipments assigned strictly to current Captain (or master fleet view for Admin)
   const myAssignedShipments = useMemo(() => {
     const isMasterAdmin = currentUser?.role === 'admin';
-    const dId = String(currentUser?.driverId || '');
+    const dId = String(currentUser?.driverId || '').trim();
     const cName = String(currentUser?.name || '').toLowerCase().trim();
+    const cPhoneDigits = String(currentUser?.phone || currentUser?.phoneNumber || '').replace(/\D/g, '').slice(-10);
     const list = Array.isArray(shipments) ? shipments : [];
 
     const directMatches = list.filter(s => {
@@ -145,9 +146,11 @@ export default function DriverDashboard() {
       if (dId && s.driverId === dId) return true;
       if (s.assignedDriver) {
         const d = typeof s.assignedDriver === 'object' ? s.assignedDriver : { driverId: s.assignedDriver };
-        const sDriverId = String(d.driverId || d.id || '');
+        const sDriverId = String(d.driverId || d.id || '').trim();
         const sDriverName = String(d.name || '').toLowerCase().trim();
+        const sDriverPhoneDigits = String(d.phone || '').replace(/\D/g, '').slice(-10);
         if (dId && sDriverId === dId) return true;
+        if (cPhoneDigits.length >= 10 && sDriverPhoneDigits === cPhoneDigits) return true;
         if (cName && sDriverName && (sDriverName === cName || sDriverName.includes(cName))) return true;
       }
       return false;

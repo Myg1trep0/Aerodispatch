@@ -38,6 +38,7 @@ import { getConsignmentPhoto } from '../utils/parcelUtils';
 export default function TrackingPage() {
   const { 
     shipments, 
+    visibleShipments,
     selectedAwb, 
     setSelectedAwb, 
     trackingQuery, 
@@ -60,7 +61,8 @@ export default function TrackingPage() {
   const initialAwb = (urlAwb || trackingQuery || selectedAwb || '').trim();
   const [inputVal, setInputVal] = useState(initialAwb);
   const [activeShipment, setActiveShipment] = useState(() => {
-    const raw = shipments.find(s => s.awbNumber.toLowerCase() === initialAwb.toLowerCase()) || shipments[0];
+    const pool = (Array.isArray(visibleShipments) && visibleShipments.length > 0) ? visibleShipments : shipments;
+    const raw = pool.find(s => s.awbNumber?.toLowerCase() === initialAwb.toLowerCase()) || pool[0];
     return sanitizeShipment(raw);
   });
   const [isSearching, setIsSearching] = useState(false);
@@ -117,19 +119,17 @@ export default function TrackingPage() {
     const minDelay = new Promise(resolve => setTimeout(resolve, 1000)); // strictly 1.0s service loading
 
     try {
-      if (isBackendOnline) {
-        const res = await apiGetOrderTracking(query);
-        if (res && res.data) {
-          await minDelay;
-          setActiveShipment(sanitizeShipment(res.data));
-          setSelectedAwb(res.data.awbNumber);
-          if (shouldToast) {
-            addToast(`Found shipment ${res.data.awbNumber}!`, 'success');
-          }
-          setIsSearching(false);
-          setIsTrackingLoading(false);
-          return;
+      const res = await apiGetOrderTracking(query);
+      if (res && res.data) {
+        await minDelay;
+        setActiveShipment(sanitizeShipment(res.data));
+        setSelectedAwb(res.data.awbNumber);
+        if (shouldToast) {
+          addToast(`Found shipment ${res.data.awbNumber}!`, 'success');
         }
+        setIsSearching(false);
+        setIsTrackingLoading(false);
+        return;
       }
     } catch (e) {
       console.warn("Backend lookup notice:", e.message);
@@ -158,7 +158,7 @@ export default function TrackingPage() {
     }
     setIsSearching(false);
     setIsTrackingLoading(false);
-  }, [isBackendOnline, shipments, setSelectedAwb, addToast]);
+  }, [shipments, setSelectedAwb, addToast]);
 
   // Sync when trackingQuery or selectedAwb changes externally
   useEffect(() => {
@@ -168,6 +168,19 @@ export default function TrackingPage() {
       performSearch(target, false);
     }
   }, [trackingQuery, selectedAwb, performSearch]);
+
+  // Auto-select latest visible shipment once cloud orders finish syncing on a new device/session
+  useEffect(() => {
+    if (activeShipment?.awbNumber || searchError) return;
+    const pool = (Array.isArray(visibleShipments) && visibleShipments.length > 0) ? visibleShipments : shipments;
+    if (!Array.isArray(pool) || pool.length === 0) return;
+    const targetQuery = (urlAwb || trackingQuery || selectedAwb || '').trim().toLowerCase();
+    const chosen = (targetQuery && pool.find(s => s.awbNumber?.toLowerCase() === targetQuery || s.orderId?.toLowerCase() === targetQuery)) || pool[0];
+    if (chosen) {
+      setActiveShipment(sanitizeShipment(chosen));
+      if (!inputVal) setInputVal(chosen.awbNumber || '');
+    }
+  }, [visibleShipments, shipments, activeShipment?.awbNumber, searchError, urlAwb, trackingQuery, selectedAwb, inputVal]);
 
   // Reactive Sync: Automatically keep activeShipment updated when shipments in AppContext update (e.g. Captain delivers package)
   useEffect(() => {
@@ -183,12 +196,14 @@ export default function TrackingPage() {
         sanitized.currentStatus !== activeShipment.currentStatus ||
         sanitized.status !== activeShipment.status ||
         JSON.stringify(sanitized.proofOfDelivery) !== JSON.stringify(activeShipment.proofOfDelivery) ||
+        JSON.stringify(sanitized.customerRating) !== JSON.stringify(activeShipment.customerRating) ||
+        JSON.stringify(sanitized.assignedDriver) !== JSON.stringify(activeShipment.assignedDriver) ||
         (sanitized.events?.length || 0) !== (activeShipment.events?.length || 0)
       ) {
         setActiveShipment(sanitized);
       }
     }
-  }, [shipments, activeShipment?.awbNumber, activeShipment?.currentStatus, activeShipment?.status, activeShipment?.proofOfDelivery, activeShipment?.events?.length]);
+  }, [shipments, activeShipment?.awbNumber, activeShipment?.currentStatus, activeShipment?.status, activeShipment?.proofOfDelivery, activeShipment?.customerRating, activeShipment?.assignedDriver, activeShipment?.events?.length]);
 
   // Cross-tab storage synchronization: Instant update if captain delivered in another browser tab
   useEffect(() => {
@@ -389,6 +404,44 @@ export default function TrackingPage() {
             <span>{isLoadingOrders ? 'Refreshing...' : 'Refresh'}</span>
           </button>
         </form>
+
+        {Array.isArray(visibleShipments) && visibleShipments.length > 0 && (
+          <div style={{ marginTop: '1rem', display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'center', gap: '0.5rem' }}>
+            <span style={{ fontSize: '0.76rem', color: 'var(--text-dim)', fontWeight: 600 }}>
+              Your Consignments ({visibleShipments.length}):
+            </span>
+            {visibleShipments.slice(0, 8).map(s => {
+              const isSelected = activeShipment?.awbNumber === s.awbNumber;
+              return (
+                <button
+                  key={s.awbNumber}
+                  type="button"
+                  onClick={() => {
+                    setSearchError('');
+                    setInputVal(s.awbNumber);
+                    setActiveShipment(sanitizeShipment(s));
+                    setSelectedAwb(s.awbNumber);
+                  }}
+                  className="btn btn-secondary"
+                  style={{
+                    padding: '0.32rem 0.75rem',
+                    fontSize: '0.76rem',
+                    borderRadius: '9999px',
+                    borderColor: isSelected ? 'var(--primary-500)' : 'var(--border-subtle)',
+                    background: isSelected ? 'rgba(99, 102, 241, 0.14)' : 'var(--bg-secondary)',
+                    color: isSelected ? 'var(--primary-500)' : 'var(--text-main)',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '0.4rem'
+                  }}
+                >
+                  <span className="mono" style={{ fontWeight: 600 }}>{s.awbNumber}</span>
+                  <span style={{ opacity: 0.75, fontSize: '0.7rem' }}>• {(s.currentStatus || s.status || '').replace(/_/g, ' ')}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       {(isSearching || isTrackingLoading || isLoadingOrders) ? (
